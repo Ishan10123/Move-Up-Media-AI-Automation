@@ -236,9 +236,27 @@ def ask_ai(
             context
         )
 
-        final_response = generate_ai_response(
-            prompt
+        response = client.models.generate_content(
+            model=PRIMARY_MODEL,
+            contents=prompt
         )
+
+        final_response = extract_response_text(
+            response
+        )
+
+        if (
+            not final_response
+            or
+            "quota" in final_response.lower()
+            or
+            "resource_exhausted"
+            in final_response.lower()
+        ):
+
+            return (
+                "AI assistant is temporarily unavailable due to API usage limits. Please retry shortly."
+            )
 
         set_cache(
             cache_key,
@@ -250,6 +268,34 @@ def ask_ai(
 
     except Exception as error:
 
-        return handle_ai_error(
-            error
+        error_text = str(error)
+
+        print(
+            f"[AI Assistant Error] {error_text}"
+        )
+
+        if (
+            "429" in error_text
+            or
+            "RESOURCE_EXHAUSTED"
+            in error_text
+        ):
+
+            return (
+                "AI assistant quota temporarily exceeded. Please retry in a few minutes."
+            )
+
+        if (
+            "503" in error_text
+            or
+            "UNAVAILABLE"
+            in error_text
+        ):
+
+            return (
+                "AI assistant service temporarily overloaded. Please retry shortly."
+            )
+
+        return (
+            f"AI Assistant Error: {error_text}"
         )

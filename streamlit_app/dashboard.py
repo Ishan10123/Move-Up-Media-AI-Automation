@@ -947,6 +947,10 @@ with assistant_tab:
         "Autonomous AI Media Strategist"
     )
 
+    st.caption(
+        "AI-powered conversational operational intelligence engine for strategic YouTube analytics."
+    )
+
     for message in st.session_state.chat_history:
 
         with st.chat_message(
@@ -965,38 +969,47 @@ with assistant_tab:
 
         user_question = user_question.strip()
 
-    if not user_question:
+        if not user_question:
 
-        st.stop()
+            st.stop()
 
-    current_time = time.time()
+        current_time = time.time()
 
-    if (
-        current_time
-        -
-        st.session_state.last_ai_request
-    ) < AI_REQUEST_COOLDOWN:
-
-        st.warning(
-            "AI request cooldown active. Please wait a few seconds before sending another request."
+        cooldown_remaining = (
+            AI_REQUEST_COOLDOWN
+            -
+            (
+                current_time
+                -
+                st.session_state.last_ai_request
+            )
         )
 
-        st.stop()
+        if cooldown_remaining > 0:
+
+            st.warning(
+                f"AI request cooldown active. Please wait {int(cooldown_remaining)} seconds."
+            )
+
+            st.stop()
 
         st.session_state.last_ai_request = (
             current_time
         )
 
         st.session_state.chat_history.append(
-            
             {
                 "role": "user",
                 "content": user_question,
-                "timestamp": str(datetime.now())
+                "timestamp": str(
+                    datetime.now()
+                )
             }
         )
-        
-        if len(st.session_state.chat_history) > MAX_CHAT_HISTORY:
+
+        if len(
+            st.session_state.chat_history
+        ) > MAX_CHAT_HISTORY:
 
             st.session_state.chat_history = (
                 st.session_state.chat_history[
@@ -1012,6 +1025,12 @@ with assistant_tab:
 
         with st.chat_message("assistant"):
 
+            ai_response = ""
+
+            detected_intent = (
+                "general_analysis"
+            )
+
             with st.spinner(
                 "Autonomous AI strategist analyzing operational intelligence..."
             ):
@@ -1025,35 +1044,89 @@ with assistant_tab:
                         all_channel_data=all_channel_data
                     )
 
-                    response = result["response"]
+                    ai_response = result.get(
+                        "response",
+                        "No AI response generated."
+                    )
 
-                    detected_intent = result["intent"]
+                    detected_intent = result.get(
+                        "intent",
+                        "general_analysis"
+                    )
 
                     st.caption(
                         f"Detected Intent: {detected_intent}"
                     )
 
-                    st.markdown(
-                        response
-                    )
+                    if (
+                        "quota"
+                        in ai_response.lower()
+                    ):
+
+                        st.warning(
+                            ai_response
+                        )
+
+                    elif (
+                        "503"
+                        in ai_response.lower()
+                    ):
+
+                        st.warning(
+                            "AI service is temporarily overloaded. Please retry shortly."
+                        )
+
+                    elif (
+                        "404"
+                        in ai_response.lower()
+                    ):
+
+                        st.error(
+                            "Configured Gemini model is unavailable."
+                        )
+
+                    elif (
+                        "error"
+                        in ai_response.lower()
+                    ):
+
+                        st.error(
+                            ai_response
+                        )
+
+                    else:
+
+                        st.success(
+                            "AI operational analysis completed successfully."
+                        )
+
+                        st.markdown(
+                            ai_response
+                        )
 
                 except Exception as error:
 
-                    response = (
+                    ai_response = (
                         f"AI Agent Error: {str(error)}"
                     )
 
-                    st.error(response)
+                    st.error(
+                        ai_response
+                    )
 
-        st.session_state.chat_history.append(
-            {
-                "role": "assistant",
-                "content": response,
-                "timestamp": str(datetime.now())
-            }
-        )
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": ai_response,
+                    "timestamp": str(
+                        datetime.now()
+                    )
+                }
+            )
 
     if st.session_state.chat_history:
+
+        st.markdown("")
 
         if st.button(
             "Clear Conversation",
