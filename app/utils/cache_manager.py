@@ -576,3 +576,45 @@ def cache_health_check():
             "error":
                 str(error)
         }
+        
+        
+def cache_health_check():
+
+    try:
+
+        cleanup_expired_cache()
+
+        stats = get_cache_statistics()
+
+        cache_usage_percent = round(
+
+            (
+                stats["total_cache_items"]
+                /
+                MAX_CACHE_ITEMS
+            ) * 100,
+            2
+        )
+
+        return {
+
+            "healthy":
+                cache_usage_percent < 90,
+
+            "cache_usage_percent":
+                cache_usage_percent,
+
+            "statistics":
+                stats
+        }
+
+    except Exception as error:
+
+        return {
+
+            "healthy":
+                False,
+
+            "error":
+                str(error)
+        }
