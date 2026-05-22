@@ -5,7 +5,7 @@ from statistics import mean
 from google import genai
 
 from app.utils.config import (
-    GEMINI_API_KEY,
+    GEMINI_API_KEYS,
     PRIMARY_MODEL,
     FALLBACK_MODEL,
     MAX_RETRIES,
@@ -21,9 +21,11 @@ from app.utils.cache_manager import (
 )
 
 
-client = genai.Client(
-    api_key=GEMINI_API_KEY
-)
+def create_client(api_key):
+
+    return genai.Client(
+        api_key=api_key
+    )
 
 
 def safe_float(value):
@@ -44,6 +46,7 @@ def calculate_channel_aggregates(videos):
         return {}
 
     return {
+
         "total_videos":
             len(videos),
 
@@ -153,7 +156,7 @@ def build_report_prompt(
     return f"""
 You are a senior AI media strategist and operational intelligence analyst at MoveUp Media.
 
-Generate a concise executive YouTube intelligence report.
+Generate an executive YouTube operational intelligence report.
 
 Channel Name:
 {channel_name}
@@ -164,7 +167,7 @@ Aggregate Metrics:
 Top Performing Videos:
 {top_videos}
 
-Underperforming Videos:
+Weakest Videos:
 {bottom_videos}
 
 Analytics Dataset:
@@ -172,11 +175,11 @@ Analytics Dataset:
 
 Requirements:
 - concise
-- analytical
 - operational
-- business-oriented
+- business-focused
+- analytical
 - actionable
-- avoid generic advice
+- avoid hallucinations
 - avoid markdown symbols
 - maximum 600 words
 
@@ -208,8 +211,25 @@ def extract_response_text(response):
 
                 return response.text.strip()
 
+        if hasattr(response, "candidates"):
+
+            candidates = response.candidates
+
+            if candidates:
+
+                content = (
+                    candidates[0]
+                    .content
+                    .parts[0]
+                    .text
+                )
+
+                if content:
+
+                    return content.strip()
+
         return (
-            "No report generated."
+            "AI report generation returned an empty response."
         )
 
     except Exception:
@@ -223,23 +243,25 @@ def is_retryable_error(error):
 
     error_text = str(error).lower()
 
-    retry_keywords = [
+    retryable_keywords = [
         "429",
         "503",
-        "resource_exhausted",
         "quota",
+        "resource_exhausted",
         "unavailable",
         "overloaded",
-        "timeout"
+        "timeout",
+        "internal"
     ]
 
     return any(
         keyword in error_text
-        for keyword in retry_keywords
+        for keyword in retryable_keywords
     )
 
 
-def generate_with_model(
+def generate_with_client(
+    client,
     model_name,
     prompt
 ):
@@ -270,43 +292,63 @@ def generate_ai_report(prompt):
 
     last_error = None
 
-    for model_name in models_to_try:
+    for api_key in GEMINI_API_KEYS:
 
-        retries = (
-            MAX_RETRIES
-            if ENABLE_AI_RETRY
-            else 1
+        client = create_client(
+            api_key
         )
 
-        for attempt in range(retries):
+        for model_name in models_to_try:
 
-            try:
+            retries = (
+                MAX_RETRIES
+                if ENABLE_AI_RETRY
+                else 1
+            )
 
-                return generate_with_model(
-                    model_name,
-                    prompt
-                )
+            for attempt in range(retries):
 
-            except Exception as error:
+                try:
 
-                last_error = error
-
-                if not is_retryable_error(
-                    error
-                ):
-
-                    break
-
-                if attempt < retries - 1:
-
-                    wait_time = (
-                        RETRY_DELAY_SECONDS
-                        * (attempt + 1)
+                    response = generate_with_client(
+                        client,
+                        model_name,
+                        prompt
                     )
 
-                    time.sleep(
-                        wait_time
+                    if response:
+
+                        return response
+
+                except Exception as error:
+
+                    last_error = error
+
+                    print(
+                        f"[AI REPORT ERROR] "
+                        f"Model={model_name} "
+                        f"Attempt={attempt + 1} "
+                        f"Error={str(error)}"
                     )
+
+                    if not is_retryable_error(
+                        error
+                    ):
+
+                        break
+
+                    if attempt < retries - 1:
+
+                        wait_time = (
+                            RETRY_DELAY_SECONDS
+                            * (attempt + 1)
+                        )
+
+                        time.sleep(
+                            wait_time
+                        )
+
+                    continue
 
     return handle_ai_error(
         last_error
@@ -317,25 +359,36 @@ def handle_ai_error(error):
 
     error_text = str(error)
 
-    if "429" in error_text:
+    if (
+        "429" in error_text
+        or
+        "quota" in error_text.lower()
+    ):
 
         return (
-            "AI report generation quota temporarily exceeded. "
+            "AI report generation quota temporarily exceeded across active API pools. "
             "Please retry shortly."
         )
 
-    if "503" in error_text:
+    if (
+        "503" in error_text
+        or
+        "unavailable" in error_text.lower()
+    ):
 
         return (
             "AI reporting service is temporarily overloaded. "
             "Please retry in a few moments."
         )
 
-    if "resource_exhausted" in error_text.lower():
+    if (
+        "resource_exhausted"
+        in error_text.lower()
+    ):
 
         return (
-            "AI resources are temporarily exhausted. "
-            "Please retry later."
+            "AI infrastructure resources are temporarily exhausted. "
+            "Please retry shortly."
         )
 
     return (
@@ -381,6 +434,10 @@ def generate_channel_report(
         return final_response
 
     except Exception as error:
+
+        print(
+            f"[REPORT_GENERATOR_FATAL] {str(error)}"
+        )
 
         return handle_ai_error(
             error

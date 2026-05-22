@@ -1,14 +1,25 @@
-from datetime import datetime, timezone
+import math
+
+from datetime import datetime
+from datetime import timezone
+
 from statistics import mean
+
+
+PROCESSING_ENGINE_VERSION = "2.0.0"
 
 
 def safe_int(value):
 
     try:
 
-        return int(value)
+        if value is None:
 
-    except:
+            return 0
+
+        return int(float(value))
+
+    except Exception:
 
         return 0
 
@@ -17,9 +28,30 @@ def safe_float(value):
 
     try:
 
+        if value is None:
+
+            return 0.0
+
         return float(value)
 
-    except:
+    except Exception:
+
+        return 0.0
+
+
+def safe_round(
+    value,
+    digits=2
+):
+
+    try:
+
+        return round(
+            safe_float(value),
+            digits
+        )
+
+    except Exception:
 
         return 0.0
 
@@ -31,20 +63,27 @@ def calculate_engagement_rate(
 ):
 
     views = safe_int(views)
+
     likes = safe_int(likes)
+
     comments = safe_int(comments)
 
     if views <= 0:
 
-        return 0
+        return 0.0
+
+    weighted_engagement = (
+        (likes * 1)
+        +
+        (comments * 3)
+    )
 
     engagement_rate = (
-        (likes + comments) / views
+        weighted_engagement / views
     ) * 100
 
-    return round(
-        engagement_rate,
-        2
+    return safe_round(
+        engagement_rate
     )
 
 
@@ -55,34 +94,47 @@ def calculate_views_per_day(
 
     views = safe_int(views)
 
+    if views <= 0:
+
+        return 0.0
+
     try:
 
         published_date = datetime.fromisoformat(
-            published_at.replace(
+            str(published_at).replace(
                 "Z",
                 "+00:00"
             )
         )
 
-    except:
+    except Exception:
 
-        return 0
+        return 0.0
 
     current_date = datetime.now(
         timezone.utc
     )
 
-    days_live = (
+    total_seconds = (
         current_date - published_date
-    ).days
+    ).total_seconds()
 
-    if days_live <= 0:
+    days_live = max(
+        total_seconds / 86400,
+        1
+    )
 
-        days_live = 1
+    views_per_day = (
+        views / days_live
+    )
 
-    return round(
-        views / days_live,
-        2
+    views_per_day = min(
+        views_per_day,
+        1000000
+    )
+
+    return safe_round(
+        views_per_day
     )
 
 
@@ -92,15 +144,15 @@ def calculate_like_ratio(
 ):
 
     views = safe_int(views)
+
     likes = safe_int(likes)
 
     if views <= 0:
 
-        return 0
+        return 0.0
 
-    return round(
-        (likes / views) * 100,
-        2
+    return safe_round(
+        (likes / views) * 100
     )
 
 
@@ -110,15 +162,15 @@ def calculate_comment_ratio(
 ):
 
     views = safe_int(views)
+
     comments = safe_int(comments)
 
     if views <= 0:
 
-        return 0
+        return 0.0
 
-    return round(
-        (comments / views) * 100,
-        2
+    return safe_round(
+        (comments / views) * 100
     )
 
 
@@ -133,15 +185,15 @@ def calculate_engagement_quality(
         (comment_ratio * 0.3)
     )
 
-    if quality_score >= 10:
+    if quality_score >= 12:
 
         return "Exceptional"
 
-    elif quality_score >= 7:
+    if quality_score >= 7:
 
         return "Strong"
 
-    elif quality_score >= 4:
+    if quality_score >= 4:
 
         return "Average"
 
@@ -152,15 +204,15 @@ def calculate_growth_velocity(
     views_per_day
 ):
 
-    if views_per_day >= 10000:
+    if views_per_day >= 50000:
 
         return "Explosive Growth"
 
-    elif views_per_day >= 5000:
+    if views_per_day >= 10000:
 
         return "High Growth"
 
-    elif views_per_day >= 1000:
+    if views_per_day >= 3000:
 
         return "Moderate Growth"
 
@@ -173,15 +225,17 @@ def calculate_estimated_ctr_signal(
     like_ratio
 ):
 
+    normalized_views = min(
+        math.log10(
+            views_per_day + 1
+        ) * 2,
+        10
+    )
+
     ctr_score = (
         (engagement_rate * 0.5)
         +
-        (
-            min(
-                views_per_day / 1000,
-                10
-            ) * 0.3
-        )
+        (normalized_views * 0.3)
         +
         (like_ratio * 0.2)
     )
@@ -190,7 +244,7 @@ def calculate_estimated_ctr_signal(
 
         return "High CTR Probability"
 
-    elif ctr_score >= 5:
+    if ctr_score >= 5:
 
         return "Moderate CTR Probability"
 
@@ -215,7 +269,7 @@ def calculate_estimated_retention_signal(
 
         return "Strong Retention"
 
-    elif retention_score >= 5:
+    if retention_score >= 5:
 
         return "Moderate Retention"
 
@@ -228,22 +282,23 @@ def calculate_momentum_score(
     like_ratio
 ):
 
+    normalized_views = min(
+        math.log10(
+            views_per_day + 1
+        ) * 2,
+        10
+    )
+
     momentum_score = (
         (engagement_rate * 0.4)
         +
-        (
-            min(
-                views_per_day / 1000,
-                10
-            ) * 0.4
-        )
+        (normalized_views * 0.4)
         +
         (like_ratio * 0.2)
     )
 
-    return round(
-        momentum_score,
-        2
+    return safe_round(
+        momentum_score
     )
 
 
@@ -253,7 +308,7 @@ def classify_momentum(momentum_score):
 
         return "Viral Momentum"
 
-    elif momentum_score >= 5:
+    if momentum_score >= 5:
 
         return "Growing Momentum"
 
@@ -278,7 +333,7 @@ def calculate_audience_signal_strength(
 
         return "High Audience Resonance"
 
-    elif audience_signal >= 5:
+    if audience_signal >= 5:
 
         return "Moderate Audience Resonance"
 
@@ -290,48 +345,77 @@ def calculate_content_efficiency(
     engagement_rate
 ):
 
+    normalized_views = min(
+        math.log10(
+            views_per_day + 1
+        ) * 2,
+        10
+    )
+
     efficiency_score = (
-        (
-            min(
-                views_per_day / 1000,
-                10
-            )
-        ) * 0.6
+        (normalized_views * 0.6)
         +
         (engagement_rate * 0.4)
     )
 
-    return round(
-        efficiency_score,
-        2
+    return safe_round(
+        efficiency_score
     )
 
 
 def calculate_performance_score(video):
 
+    views = safe_int(
+        video.get(
+            "views",
+            0
+        )
+    )
+
+    likes = safe_int(
+        video.get(
+            "likes",
+            0
+        )
+    )
+
+    comments = safe_int(
+        video.get(
+            "comments",
+            0
+        )
+    )
+
+    published_at = video.get(
+        "published_at",
+        ""
+    )
+
     engagement_rate = calculate_engagement_rate(
-        video["views"],
-        video["likes"],
-        video["comments"]
+        views,
+        likes,
+        comments
     )
 
     views_per_day = calculate_views_per_day(
-        video["views"],
-        video["published_at"]
+        views,
+        published_at
     )
 
     like_ratio = calculate_like_ratio(
-        video["views"],
-        video["likes"]
+        views,
+        likes
     )
 
     comment_ratio = calculate_comment_ratio(
-        video["views"],
-        video["comments"]
+        views,
+        comments
     )
 
     normalized_views = min(
-        views_per_day / 1000,
+        math.log10(
+            views_per_day + 1
+        ) * 2,
         10
     )
 
@@ -345,19 +429,18 @@ def calculate_performance_score(video):
         (comment_ratio * 0.10)
     )
 
-    return round(
-        score,
-        2
+    return safe_round(
+        score
     )
 
 
 def classify_video(score):
 
-    if score >= 8:
+    if score >= 7:
 
         return "Strong"
 
-    elif score >= 4:
+    if score >= 4:
 
         return "Average"
 
@@ -367,13 +450,20 @@ def classify_video(score):
 def generate_video_summary(video):
 
     return (
-        f"{video['title']} achieved "
-        f"{video['views']} views with "
-        f"{video['engagement_rate']}% engagement. "
-        f"The video is classified as "
-        f"{video['classification']} with "
-        f"{video['growth_velocity']} and "
-        f"{video['estimated_retention_signal']}."
+
+        f"{video.get('title', 'Unknown Video')} achieved "
+
+        f"{video.get('views', 0)} views with "
+
+        f"{video.get('engagement_rate', 0)}% engagement. "
+
+        f"The content shows "
+
+        f"{video.get('growth_velocity', 'Unknown Growth')} "
+
+        f"with "
+
+        f"{video.get('estimated_retention_signal', 'Unknown Retention')}."
     )
 
 
@@ -381,31 +471,32 @@ def calculate_channel_health_score(videos):
 
     if not videos:
 
-        return 0
+        return 0.0
 
     performance_scores = [
+
         safe_float(
             video.get(
                 "performance_score",
                 0
             )
         )
+
         for video in videos
     ]
 
-    return round(
-        mean(performance_scores),
-        2
+    return safe_round(
+        mean(performance_scores)
     )
 
 
 def classify_channel_health(score):
 
-    if score >= 8:
+    if score >= 7:
 
         return "High Performing"
 
-    elif score >= 5:
+    if score >= 4:
 
         return "Stable"
 
@@ -416,55 +507,77 @@ def generate_channel_summary(videos):
 
     if not videos:
 
-        return {}
+        return {
+
+            "total_videos": 0,
+            "total_views": 0,
+            "average_engagement": 0,
+            "average_performance_score": 0,
+            "strong_videos": 0,
+            "underperforming_videos": 0,
+            "channel_health_score": 0,
+            "channel_health": "No Data"
+        }
 
     total_views = sum([
+
         safe_int(
             video.get(
                 "views",
                 0
             )
         )
+
         for video in videos
     ])
 
-    average_engagement = round(
+    average_engagement = safe_round(
+
         mean([
+
             safe_float(
                 video.get(
                     "engagement_rate",
                     0
                 )
             )
+
             for video in videos
-        ]),
-        2
+        ])
     )
 
-    average_score = round(
+    average_score = safe_round(
+
         mean([
+
             safe_float(
                 video.get(
                     "performance_score",
                     0
                 )
             )
+
             for video in videos
-        ]),
-        2
+        ])
     )
 
     strong_videos = len([
+
         video
+
         for video in videos
+
         if video.get(
             "classification"
         ) == "Strong"
     ])
 
     underperforming_videos = len([
+
         video
+
         for video in videos
+
         if video.get(
             "classification"
         ) == "Underperforming"
@@ -475,6 +588,7 @@ def generate_channel_summary(videos):
     )
 
     return {
+
         "total_videos":
             len(videos),
 
@@ -503,153 +617,244 @@ def generate_channel_summary(videos):
     }
 
 
+def compress_ai_context(
+    videos,
+    limit=5
+):
+
+    compressed = []
+
+    for video in videos[:limit]:
+
+        compressed.append({
+
+            "title":
+                video.get(
+                    "title"
+                ),
+
+            "views":
+                video.get(
+                    "views"
+                ),
+
+            "engagement_rate":
+                video.get(
+                    "engagement_rate"
+                ),
+
+            "performance_score":
+                video.get(
+                    "performance_score"
+                ),
+
+            "classification":
+                video.get(
+                    "classification"
+                )
+        })
+
+    return compressed
+
+
 def enrich_video_metrics(videos):
 
     enriched_videos = []
 
+    if not videos:
+
+        return enriched_videos
+
     for video in videos:
 
-        engagement_rate = calculate_engagement_rate(
-            video["views"],
-            video["likes"],
-            video["comments"]
-        )
+        try:
 
-        views_per_day = calculate_views_per_day(
-            video["views"],
-            video["published_at"]
-        )
-
-        like_ratio = calculate_like_ratio(
-            video["views"],
-            video["likes"]
-        )
-
-        comment_ratio = calculate_comment_ratio(
-            video["views"],
-            video["comments"]
-        )
-
-        performance_score = calculate_performance_score(
-            video
-        )
-
-        classification = classify_video(
-            performance_score
-        )
-
-        estimated_ctr_signal = (
-            calculate_estimated_ctr_signal(
-                engagement_rate,
-                views_per_day,
-                like_ratio
+            views = safe_int(
+                video.get(
+                    "views",
+                    0
+                )
             )
-        )
 
-        estimated_retention_signal = (
-            calculate_estimated_retention_signal(
-                engagement_rate,
-                comment_ratio,
-                like_ratio
+            likes = safe_int(
+                video.get(
+                    "likes",
+                    0
+                )
             )
-        )
 
-        engagement_quality = (
-            calculate_engagement_quality(
-                engagement_rate,
-                comment_ratio
+            comments = safe_int(
+                video.get(
+                    "comments",
+                    0
+                )
             )
-        )
 
-        growth_velocity = (
-            calculate_growth_velocity(
-                views_per_day
+            published_at = video.get(
+                "published_at",
+                ""
             )
-        )
 
-        momentum_score = (
-            calculate_momentum_score(
-                engagement_rate,
-                views_per_day,
-                like_ratio
+            engagement_rate = calculate_engagement_rate(
+                views,
+                likes,
+                comments
             )
-        )
 
-        momentum_classification = (
-            classify_momentum(
-                momentum_score
+            views_per_day = calculate_views_per_day(
+                views,
+                published_at
             )
-        )
 
-        audience_signal_strength = (
-            calculate_audience_signal_strength(
-                engagement_rate,
-                comment_ratio,
-                like_ratio
+            like_ratio = calculate_like_ratio(
+                views,
+                likes
             )
-        )
 
-        content_efficiency = (
-            calculate_content_efficiency(
-                views_per_day,
-                engagement_rate
+            comment_ratio = calculate_comment_ratio(
+                views,
+                comments
             )
-        )
 
-        enriched_video = {
-            **video,
+            performance_score = calculate_performance_score(
+                video
+            )
 
-            "engagement_rate":
-                engagement_rate,
+            classification = classify_video(
+                performance_score
+            )
 
-            "views_per_day":
-                views_per_day,
+            estimated_ctr_signal = (
+                calculate_estimated_ctr_signal(
+                    engagement_rate,
+                    views_per_day,
+                    like_ratio
+                )
+            )
 
-            "like_ratio":
-                like_ratio,
+            estimated_retention_signal = (
+                calculate_estimated_retention_signal(
+                    engagement_rate,
+                    comment_ratio,
+                    like_ratio
+                )
+            )
 
-            "comment_ratio":
-                comment_ratio,
+            engagement_quality = (
+                calculate_engagement_quality(
+                    engagement_rate,
+                    comment_ratio
+                )
+            )
 
-            "performance_score":
-                performance_score,
+            growth_velocity = (
+                calculate_growth_velocity(
+                    views_per_day
+                )
+            )
 
-            "classification":
-                classification,
+            momentum_score = (
+                calculate_momentum_score(
+                    engagement_rate,
+                    views_per_day,
+                    like_ratio
+                )
+            )
 
-            "estimated_ctr_signal":
-                estimated_ctr_signal,
+            momentum_classification = (
+                classify_momentum(
+                    momentum_score
+                )
+            )
 
-            "estimated_retention_signal":
-                estimated_retention_signal,
+            audience_signal_strength = (
+                calculate_audience_signal_strength(
+                    engagement_rate,
+                    comment_ratio,
+                    like_ratio
+                )
+            )
 
-            "engagement_quality":
-                engagement_quality,
+            content_efficiency = (
+                calculate_content_efficiency(
+                    views_per_day,
+                    engagement_rate
+                )
+            )
 
-            "growth_velocity":
-                growth_velocity,
+            enriched_video = {
 
-            "momentum_score":
-                momentum_score,
+                **video,
 
-            "momentum_classification":
-                momentum_classification,
+                "engagement_rate":
+                    engagement_rate,
 
-            "audience_signal_strength":
-                audience_signal_strength,
+                "views_per_day":
+                    views_per_day,
 
-            "content_efficiency":
-                content_efficiency
-        }
+                "like_ratio":
+                    like_ratio,
 
-        enriched_video[
-            "summary"
-        ] = generate_video_summary(
-            enriched_video
-        )
+                "comment_ratio":
+                    comment_ratio,
 
-        enriched_videos.append(
-            enriched_video
-        )
+                "performance_score":
+                    performance_score,
+
+                "classification":
+                    classification,
+
+                "estimated_ctr_signal":
+                    estimated_ctr_signal,
+
+                "estimated_retention_signal":
+                    estimated_retention_signal,
+
+                "engagement_quality":
+                    engagement_quality,
+
+                "growth_velocity":
+                    growth_velocity,
+
+                "momentum_score":
+                    momentum_score,
+
+                "momentum_classification":
+                    momentum_classification,
+
+                "audience_signal_strength":
+                    audience_signal_strength,
+
+                "content_efficiency":
+                    content_efficiency,
+
+                "processing_version":
+                    PROCESSING_ENGINE_VERSION,
+
+                "analysis_timestamp":
+                    str(
+                        datetime.now(
+                            timezone.utc
+                        )
+                    )
+            }
+
+            enriched_video[
+                "summary"
+            ] = generate_video_summary(
+                enriched_video
+            )
+
+            enriched_videos.append(
+                enriched_video
+            )
+
+        except Exception as error:
+
+            print(
+                f"[Metrics Engine Error] {str(error)}"
+            )
+
+            continue
 
     return enriched_videos

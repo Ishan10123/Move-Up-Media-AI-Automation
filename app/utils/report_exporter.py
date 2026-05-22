@@ -1,11 +1,15 @@
 import os
 import re
 
+from pathlib import Path
+
 from datetime import datetime
 
 from docx import Document
+
 from docx.shared import Pt
 from docx.shared import Inches
+
 from docx.enum.text import (
     WD_PARAGRAPH_ALIGNMENT
 )
@@ -13,27 +17,86 @@ from docx.enum.text import (
 from fpdf import FPDF
 
 
+REPORTS_DIRECTORY = "reports"
+
+
 def ensure_reports_directory():
 
-    os.makedirs(
-        "reports",
+    Path(
+        REPORTS_DIRECTORY
+    ).mkdir(
+
+        parents=True,
+
         exist_ok=True
+    )
+
+
+def sanitize_filename(filename):
+
+    filename = re.sub(
+
+        r'[<>:"/\\|?*]',
+
+        "_",
+
+        filename
+    )
+
+    filename = filename.replace(
+        " ",
+        "_"
+    )
+
+    return filename.strip()
+
+
+def generate_safe_filepath(filename):
+
+    ensure_reports_directory()
+
+    sanitized_filename = sanitize_filename(
+        filename
+    )
+
+    return os.path.join(
+
+        REPORTS_DIRECTORY,
+
+        os.path.basename(
+            sanitized_filename
+        )
     )
 
 
 def clean_text(text):
 
+    if text is None:
+
+        return ""
+
+    text = str(text)
+
     replacements = {
+
         "–": "-",
         "—": "-",
+
         "‘": "'",
         "’": "'",
+
         "“": '"',
         "”": '"',
+
         "•": "-",
+
         "…": "...",
+
         "\u00a0": " ",
-        "\t": " "
+
+        "\t": " ",
+
+        "\r": "\n"
     }
 
     for old, new in replacements.items():
@@ -46,47 +109,24 @@ def clean_text(text):
     cleaned = text.encode(
         "latin-1",
         "ignore"
-    ).decode("latin-1")
+    ).decode(
+        "latin-1"
+    )
+
+    cleaned = re.sub(
+        r"\n{3,}",
+        "\n\n",
+        cleaned
+    )
 
     return cleaned.strip()
 
 
-def is_main_heading(text):
-
-    patterns = [
-        r"^\d+\.",
-        r"^#+",
-        r"^Executive Summary",
-        r"^Strategic",
-        r"^Engagement",
-        r"^Content",
-        r"^Weekly"
-    ]
-
-    for pattern in patterns:
-
-        if re.match(
-            pattern,
-            text,
-            re.IGNORECASE
-        ):
-
-            return True
-
-    return False
-
-
-def is_sub_point(text):
-
-    return (
-        text.startswith("-")
-        or text.startswith("•")
-    )
-
-
 def normalize_line(line):
 
-    line = clean_text(line)
+    line = clean_text(
+        line
+    )
 
     line = line.replace(
         "##",
@@ -101,13 +141,94 @@ def normalize_line(line):
     return line.strip()
 
 
+def is_main_heading(text):
+
+    patterns = [
+
+        r"^\d+\.",
+
+        r"^Executive Summary",
+
+        r"^Strategic",
+
+        r"^Engagement",
+
+        r"^Content",
+
+        r"^Weekly",
+
+        r"^Operational",
+
+        r"^Performance",
+
+        r"^Recommendations",
+
+        r"^AI"
+    ]
+
+    for pattern in patterns:
+
+        if re.match(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE
+        ):
+
+            return True
+
+    return False
+
+
+def is_sub_point(text):
+
+    return (
+
+        text.startswith("-")
+        or
+        text.startswith("•")
+    )
+
+
+def split_report_lines(report):
+
+    cleaned_report = clean_text(
+        report
+    )
+
+    return cleaned_report.split(
+        "\n"
+    )
+
+
+def validate_report_content(report):
+
+    if not report:
+
+        return False
+
+    cleaned_report = clean_text(
+        report
+    )
+
+    if len(cleaned_report) < 20:
+
+        return False
+
+    return True
+
+
 def add_docx_cover_page(
-    doc,
+    document,
     channel_name
 ):
 
-    title = doc.add_heading(
+    title = document.add_heading(
+
         f"{channel_name} AI Performance Report",
+
         level=0
     )
 
@@ -115,9 +236,12 @@ def add_docx_cover_page(
         WD_PARAGRAPH_ALIGNMENT.CENTER
     )
 
-    title.style.font.size = Pt(24)
+    title.style.font.size = Pt(
+        24
+    )
 
-    subtitle = doc.add_paragraph(
+    subtitle = document.add_paragraph(
+
         "MoveUp Media - AI Content Operations Intelligence"
     )
 
@@ -125,19 +249,106 @@ def add_docx_cover_page(
         WD_PARAGRAPH_ALIGNMENT.CENTER
     )
 
-    subtitle.style.font.size = Pt(12)
+    subtitle.style.font.size = Pt(
+        12
+    )
 
-    timestamp = doc.add_paragraph(
+    generated_timestamp = document.add_paragraph(
+
         f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
-    timestamp.alignment = (
+    generated_timestamp.alignment = (
         WD_PARAGRAPH_ALIGNMENT.CENTER
     )
 
-    timestamp.style.font.size = Pt(10)
+    generated_timestamp.style.font.size = Pt(
+        10
+    )
 
-    doc.add_page_break()
+    document.add_page_break()
+
+
+def configure_docx_document(document):
+
+    section = document.sections[0]
+
+    section.top_margin = Inches(
+        0.7
+    )
+
+    section.bottom_margin = Inches(
+        0.7
+    )
+
+    section.left_margin = Inches(
+        0.7
+    )
+
+    section.right_margin = Inches(
+        0.7
+    )
+
+
+def add_docx_heading(
+    document,
+    text
+):
+
+    heading = document.add_heading(
+        text,
+        level=1
+    )
+
+    heading.style.font.size = Pt(
+        16
+    )
+
+
+def add_docx_paragraph(
+    document,
+    text
+):
+
+    paragraph = document.add_paragraph(
+        text
+    )
+
+    paragraph.style.font.size = Pt(
+        11
+    )
+
+
+def add_docx_bullet(
+    document,
+    text
+):
+
+    cleaned_bullet = (
+
+        text.replace(
+            "-",
+            ""
+        )
+
+        .replace(
+            "•",
+            ""
+        )
+
+        .strip()
+    )
+
+    bullet = document.add_paragraph(
+
+        cleaned_bullet,
+
+        style="List Bullet"
+    )
+
+    bullet.style.font.size = Pt(
+        11
+    )
 
 
 def export_to_docx(
@@ -148,71 +359,85 @@ def export_to_docx(
 
     ensure_reports_directory()
 
-    doc = Document()
+    if not validate_report_content(
+        report
+    ):
 
-    section = doc.sections[0]
-
-    section.top_margin = Inches(0.7)
-    section.bottom_margin = Inches(0.7)
-    section.left_margin = Inches(0.7)
-    section.right_margin = Inches(0.7)
-
-    add_docx_cover_page(
-        doc,
-        channel_name
-    )
-
-    lines = report.split("\n")
-
-    for raw_line in lines:
-
-        line = normalize_line(
-            raw_line
+        raise ValueError(
+            "Invalid report content."
         )
 
-        if not line:
+    safe_filepath = generate_safe_filepath(
+        filename
+    )
 
-            continue
+    try:
 
-        if is_main_heading(line):
+        document = Document()
 
-            heading = doc.add_heading(
-                line,
-                level=1
+        configure_docx_document(
+            document
+        )
+
+        add_docx_cover_page(
+
+            document,
+
+            channel_name
+        )
+
+        lines = split_report_lines(
+            report
+        )
+
+        for raw_line in lines:
+
+            line = normalize_line(
+                raw_line
             )
 
-            heading.style.font.size = Pt(16)
+            if not line:
 
-        elif is_sub_point(line):
+                continue
 
-            bullet_text = (
-                line.replace(
-                    "-",
-                    ""
-                ).replace(
-                    "•",
-                    ""
-                ).strip()
-            )
+            if is_main_heading(line):
 
-            bullet = doc.add_paragraph(
-                bullet_text,
-                style="List Bullet"
-            )
+                add_docx_heading(
 
-            bullet.style.font.size = Pt(11)
+                    document,
 
-        else:
+                    line
+                )
 
-            paragraph = doc.add_paragraph(
-                line
-            )
+            elif is_sub_point(line):
 
-            paragraph.style.font.size = Pt(11)
+                add_docx_bullet(
 
-    doc.save(filename)
+                    document,
 
-    return filename
+                    line
+                )
+
+            else:
+
+                add_docx_paragraph(
+
+                    document,
+
+                    line
+                )
+
+        document.save(
+            safe_filepath
+        )
+
+        return safe_filepath
+
+    except Exception as error:
+
+        raise Exception(
+            f"DOCX Export Error: {str(error)}"
+        )
 
 
 class EnterprisePDF(FPDF):
@@ -226,10 +451,14 @@ class EnterprisePDF(FPDF):
         )
 
         self.cell(
+
             0,
             12,
+
             self.report_title,
+
             ln=True,
+
             align="C"
         )
 
@@ -240,10 +469,14 @@ class EnterprisePDF(FPDF):
         )
 
         self.cell(
+
             0,
             8,
+
             "MoveUp Media - AI Content Operations Intelligence",
+
             ln=True,
+
             align="C"
         )
 
@@ -254,10 +487,14 @@ class EnterprisePDF(FPDF):
         )
 
         self.cell(
+
             0,
             6,
+
             f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+
             ln=True,
+
             align="C"
         )
 
@@ -274,9 +511,12 @@ class EnterprisePDF(FPDF):
         )
 
         self.cell(
+
             0,
             10,
+
             f"Page {self.page_no()}",
+
             align="C"
         )
 
@@ -295,9 +535,11 @@ def add_pdf_heading(
     )
 
     pdf.multi_cell(
+
         180,
         10,
-        text
+
+        clean_text(text)
     )
 
     pdf.ln(2)
@@ -315,9 +557,11 @@ def add_pdf_paragraph(
     )
 
     pdf.multi_cell(
+
         180,
         7,
-        text
+
+        clean_text(text)
     )
 
     pdf.ln(1)
@@ -329,15 +573,25 @@ def add_pdf_bullet(
 ):
 
     bullet_text = (
+
         "- "
+
         +
-        text.replace(
-            "-",
-            ""
-        ).replace(
-            "•",
-            ""
-        ).strip()
+
+        clean_text(
+
+            text.replace(
+                "-",
+                ""
+            )
+
+            .replace(
+                "•",
+                ""
+            )
+
+            .strip()
+        )
     )
 
     pdf.set_font(
@@ -347,8 +601,10 @@ def add_pdf_bullet(
     )
 
     pdf.multi_cell(
+
         180,
         7,
+
         bullet_text
     )
 
@@ -361,67 +617,145 @@ def export_to_pdf(
 
     ensure_reports_directory()
 
-    pdf = EnterprisePDF()
+    if not validate_report_content(
+        report
+    ):
 
-    pdf.report_title = (
-        f"{channel_name} AI Performance Report"
+        raise ValueError(
+            "Invalid report content."
+        )
+
+    safe_filepath = generate_safe_filepath(
+        filename
     )
 
-    pdf.set_auto_page_break(
-        auto=True,
-        margin=15
-    )
+    try:
 
-    pdf.set_left_margin(15)
-    pdf.set_right_margin(15)
+        pdf = EnterprisePDF()
 
-    pdf.add_page()
+        pdf.report_title = (
+            f"{channel_name} AI Performance Report"
+        )
 
-    lines = report.split("\n")
+        pdf.set_auto_page_break(
 
-    for raw_line in lines:
+            auto=True,
 
-        try:
+            margin=15
+        )
 
-            line = normalize_line(
-                raw_line
-            )
+        pdf.set_left_margin(15)
 
-            if not line:
+        pdf.set_right_margin(15)
 
-                pdf.ln(3)
+        pdf.add_page()
+
+        lines = split_report_lines(
+            report
+        )
+
+        for raw_line in lines:
+
+            try:
+
+                line = normalize_line(
+                    raw_line
+                )
+
+                if not line:
+
+                    pdf.ln(2)
+
+                    continue
+
+                if len(line.strip()) <= 1:
+
+                    continue
+
+                if is_main_heading(line):
+
+                    add_pdf_heading(
+
+                        pdf,
+
+                        line
+                    )
+
+                elif is_sub_point(line):
+
+                    add_pdf_bullet(
+
+                        pdf,
+
+                        line
+                    )
+
+                else:
+
+                    add_pdf_paragraph(
+
+                        pdf,
+
+                        line
+                    )
+
+            except Exception:
 
                 continue
 
-            if len(line.strip()) <= 1:
+        pdf.output(
+            safe_filepath
+        )
 
-                continue
+        return safe_filepath
 
-            if is_main_heading(line):
+    except Exception as error:
 
-                add_pdf_heading(
-                    pdf,
-                    line
-                )
+        raise Exception(
+            f"PDF Export Error: {str(error)}"
+        )
 
-            elif is_sub_point(line):
 
-                add_pdf_bullet(
-                    pdf,
-                    line
-                )
+def export_reports(
+    report,
+    channel_name
+):
 
-            else:
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
 
-                add_pdf_paragraph(
-                    pdf,
-                    line
-                )
+    pdf_filename = (
+        f"{channel_name}_{timestamp}.pdf"
+    )
 
-        except Exception:
+    docx_filename = (
+        f"{channel_name}_{timestamp}.docx"
+    )
 
-            continue
+    pdf_path = export_to_pdf(
 
-    pdf.output(filename)
+        report,
 
-    return filename
+        pdf_filename,
+
+        channel_name
+    )
+
+    docx_path = export_to_docx(
+
+        report,
+
+        docx_filename,
+
+        channel_name
+    )
+
+    return {
+
+        "pdf":
+            pdf_path,
+
+        "docx":
+            docx_path
+    }

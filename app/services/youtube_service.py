@@ -1,3 +1,8 @@
+import time
+
+from datetime import datetime
+from datetime import timezone
+
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -12,35 +17,75 @@ from app.utils.cache_manager import (
 )
 
 
-youtube = build(
-    "youtube",
-    "v3",
-    developerKey=YOUTUBE_API_KEY
-)
-
-
 CHANNELS = {
-    "Netflu": "@Netflu",
-    "ThePlayoffsTV": "@ThePlayoffsTV"
+
+    "Netflu":
+        "@Netflu",
+
+    "ThePlayoffsTV":
+        "@ThePlayoffsTV"
 }
 
 
 COMPETITOR_CHANNELS = {
-    "ESPN Brasil": "@espnbrasil",
-    "TNT Sports Brasil": "@TNTSportsBR",
-    "NBA Brasil": "@NBABrasil"
+
+    "ESPN Brasil":
+        "@espnbrasil",
+
+    "TNT Sports Brasil":
+        "@TNTSportsBR",
+
+    "NBA Brasil":
+        "@NBABrasil"
 }
+
+
+MAX_RETRIES = 3
+
+RETRY_DELAY_SECONDS = 3
+
+CACHE_EXPIRY_SECONDS = 1800
+
+
+def log_service_message(message):
+
+    timestamp = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    print(
+        f"[YouTube Service {timestamp}] {message}"
+    )
 
 
 def safe_int(value):
 
     try:
 
-        return int(value)
+        if value is None:
 
-    except:
+            return 0
+
+        return int(float(value))
+
+    except Exception:
 
         return 0
+
+
+def safe_float(value):
+
+    try:
+
+        if value is None:
+
+            return 0.0
+
+        return float(value)
+
+    except Exception:
+
+        return 0.0
 
 
 def safe_get(
@@ -64,11 +109,24 @@ def safe_get(
         return default
 
 
-def log_service_message(message):
+def normalize_datetime(value):
 
-    print(
-        f"[YouTube Service] {message}"
-    )
+    try:
+
+        parsed_date = datetime.fromisoformat(
+            str(value).replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+        return parsed_date.astimezone(
+            timezone.utc
+        ).isoformat()
+
+    except Exception:
+
+        return ""
 
 
 def build_youtube_client():
@@ -78,6 +136,75 @@ def build_youtube_client():
         "v3",
         developerKey=YOUTUBE_API_KEY
     )
+
+
+youtube = build_youtube_client()
+
+
+def execute_youtube_request(request):
+
+    last_error = None
+
+    for attempt in range(MAX_RETRIES):
+
+        try:
+
+            response = request.execute()
+
+            return response
+
+        except HttpError as error:
+
+            last_error = error
+
+            error_text = str(error)
+
+            log_service_message(
+                f"YouTube API Error | Attempt={attempt + 1} | Error={error_text}"
+            )
+
+            retryable_errors = [
+
+                "quota",
+                "429",
+                "500",
+                "503",
+                "backendError"
+            ]
+
+            if not any(
+
+                keyword.lower()
+                in
+                error_text.lower()
+
+                for keyword in retryable_errors
+            ):
+
+                break
+
+            if attempt < MAX_RETRIES - 1:
+
+                wait_time = (
+                    RETRY_DELAY_SECONDS
+                    * (attempt + 1)
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+        except Exception as error:
+
+            last_error = error
+
+            log_service_message(
+                f"Unexpected YouTube Request Error: {str(error)}"
+            )
+
+            break
+
+    raise last_error
 
 
 def get_channel_id(handle):
@@ -97,12 +224,20 @@ def get_channel_id(handle):
 
     try:
 
-        response = youtube.search().list(
+        request = youtube.search().list(
+
             part="snippet",
+
             q=handle,
+
             type="channel",
+
             maxResults=1
-        ).execute()
+        )
+
+        response = execute_youtube_request(
+            request
+        )
 
         items = response.get(
             "items",
@@ -118,33 +253,34 @@ def get_channel_id(handle):
             return None
 
         channel_id = safe_get(
+
             items[0],
+
             [
                 "snippet",
                 "channelId"
             ]
         )
 
+        if not channel_id:
+
+            return None
+
         set_cache(
+
             cache_key,
+
             channel_id,
-            expiry=3600
+
+            expiry=CACHE_EXPIRY_SECONDS
         )
 
         return channel_id
 
-    except HttpError as error:
-
-        log_service_message(
-            f"YouTube API Error: {error}"
-        )
-
-        return None
-
     except Exception as error:
 
         log_service_message(
-            f"Unexpected Channel ID Error: {error}"
+            f"Channel ID Fetch Error: {str(error)}"
         )
 
         return None
@@ -167,10 +303,16 @@ def get_channel_statistics(channel_id):
 
     try:
 
-        response = youtube.channels().list(
+        request = youtube.channels().list(
+
             part="statistics,snippet",
+
             id=channel_id
-        ).execute()
+        )
+
+        response = execute_youtube_request(
+            request
+        )
 
         items = response.get(
             "items",
@@ -194,6 +336,7 @@ def get_channel_statistics(channel_id):
         )
 
         result = {
+
             "channel_title":
                 snippet.get(
                     "title",
@@ -210,6 +353,14 @@ def get_channel_statistics(channel_id):
                 snippet.get(
                     "country",
                     "Unknown"
+                ),
+
+            "published_at":
+                normalize_datetime(
+                    snippet.get(
+                        "publishedAt",
+                        ""
+                    )
                 ),
 
             "subscribers":
@@ -238,9 +389,12 @@ def get_channel_statistics(channel_id):
         }
 
         set_cache(
+
             cache_key,
+
             result,
-            expiry=1800
+
+            expiry=CACHE_EXPIRY_SECONDS
         )
 
         return result
@@ -248,17 +402,23 @@ def get_channel_statistics(channel_id):
     except Exception as error:
 
         log_service_message(
-            f"Channel Statistics Error: {error}"
+            f"Channel Statistics Error: {str(error)}"
         )
 
         return {}
 
 
-def get_video_statistics(video_id):
+def get_bulk_video_statistics(video_ids):
+
+    if not video_ids:
+
+        return {}
 
     cache_key = generate_cache_key(
-        "video_stats",
-        video_id
+
+        "bulk_video_stats",
+
+        "_".join(sorted(video_ids))
     )
 
     cached_data = get_cache(
@@ -271,34 +431,49 @@ def get_video_statistics(video_id):
 
     try:
 
-        response = youtube.videos().list(
+        request = youtube.videos().list(
+
             part="statistics,contentDetails,snippet",
-            id=video_id
-        ).execute()
+
+            id=",".join(video_ids)
+        )
+
+        response = execute_youtube_request(
+            request
+        )
 
         items = response.get(
             "items",
             []
         )
 
-        if not items:
+        results = {}
 
-            return {}
+        for item in items:
 
-        item = items[0]
+            video_id = item.get(
+                "id"
+            )
+
+            if video_id:
+
+                results[video_id] = item
 
         set_cache(
+
             cache_key,
-            item,
-            expiry=1800
+
+            results,
+
+            expiry=900
         )
 
-        return item
+        return results
 
     except Exception as error:
 
         log_service_message(
-            f"Video Statistics Error: {error}"
+            f"Bulk Video Statistics Error: {str(error)}"
         )
 
         return {}
@@ -325,7 +500,9 @@ def normalize_video_data(
     )
 
     video_id = safe_get(
+
         item,
+
         [
             "id",
             "videoId"
@@ -333,6 +510,7 @@ def normalize_video_data(
     )
 
     return {
+
         "video_id":
             video_id,
 
@@ -349,19 +527,24 @@ def normalize_video_data(
             ),
 
         "published_at":
-            snippet.get(
-                "publishedAt",
-                ""
+            normalize_datetime(
+                snippet.get(
+                    "publishedAt",
+                    ""
+                )
             ),
 
         "thumbnail":
             safe_get(
+
                 snippet,
+
                 [
                     "thumbnails",
                     "high",
                     "url"
                 ],
+
                 ""
             ),
 
@@ -410,7 +593,9 @@ def get_latest_videos(
         return []
 
     cache_key = generate_cache_key(
+
         "latest_videos",
+
         f"{channel_id}_{max_results}"
     )
 
@@ -424,71 +609,129 @@ def get_latest_videos(
 
     try:
 
-        response = youtube.search().list(
+        request = youtube.search().list(
+
             part="snippet",
+
             channelId=channel_id,
+
             order="date",
+
             type="video",
+
             maxResults=max_results
-        ).execute()
-
-    except Exception as error:
-
-        log_service_message(
-            f"Video Fetch Error: {error}"
         )
 
-        return []
+        response = execute_youtube_request(
+            request
+        )
 
-    videos = []
+        items = response.get(
+            "items",
+            []
+        )
 
-    for item in response.get(
-        "items",
-        []
-    ):
+        if not items:
 
-        try:
+            return []
+
+        video_ids = []
+
+        for item in items:
 
             video_id = safe_get(
+
                 item,
+
                 [
                     "id",
                     "videoId"
                 ]
             )
 
-            if not video_id:
+            if video_id:
 
-                continue
+                video_ids.append(
+                    video_id
+                )
 
-            stats_item = get_video_statistics(
-                video_id
-            )
+        bulk_statistics = get_bulk_video_statistics(
+            video_ids
+        )
 
-            normalized_video = (
-                normalize_video_data(
+        videos = []
+
+        for item in items:
+
+            try:
+
+                video_id = safe_get(
+
+                    item,
+
+                    [
+                        "id",
+                        "videoId"
+                    ]
+                )
+
+                if not video_id:
+
+                    continue
+
+                stats_item = bulk_statistics.get(
+                    video_id,
+                    {}
+                )
+
+                normalized_video = normalize_video_data(
+
                     item,
                     stats_item
                 )
-            )
 
-            videos.append(
-                normalized_video
-            )
+                videos.append(
+                    normalized_video
+                )
 
-        except Exception as error:
+            except Exception as error:
 
-            log_service_message(
-                f"Video Processing Error: {error}"
-            )
+                log_service_message(
+                    f"Video Processing Error: {str(error)}"
+                )
 
-    set_cache(
-        cache_key,
-        videos,
-        expiry=900
-    )
+        videos = sorted(
 
-    return videos
+            videos,
+
+            key=lambda x:
+
+            x.get(
+                "published_at",
+                ""
+            ),
+
+            reverse=True
+        )
+
+        set_cache(
+
+            cache_key,
+
+            videos,
+
+            expiry=900
+        )
+
+        return videos
+
+    except Exception as error:
+
+        log_service_message(
+            f"Latest Videos Fetch Error: {str(error)}"
+        )
+
+        return []
 
 
 def get_video_by_position(
@@ -501,18 +744,25 @@ def get_video_by_position(
         return None
 
     sorted_videos = sorted(
+
         videos,
+
         key=lambda x:
+
         x.get(
             "published_at",
             ""
         ),
+
         reverse=True
     )
 
     if (
+
         position < 0
-        or position >= len(sorted_videos)
+        or
+        position >= len(sorted_videos)
+
     ):
 
         return sorted_videos[0]
@@ -527,11 +777,16 @@ def get_top_performing_video(videos):
         return None
 
     return max(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "performance_score",
-            0
+
+        safe_float(
+            x.get(
+                "performance_score",
+                0
+            )
         )
     )
 
@@ -543,11 +798,16 @@ def get_underperforming_video(videos):
         return None
 
     return min(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "performance_score",
-            0
+
+        safe_float(
+            x.get(
+                "performance_score",
+                0
+            )
         )
     )
 
@@ -568,18 +828,19 @@ def get_channel_complete_data(
 
             return None
 
-        channel_statistics = (
-            get_channel_statistics(
-                channel_id
-            )
+        channel_statistics = get_channel_statistics(
+            channel_id
         )
 
         latest_videos = get_latest_videos(
+
             channel_id,
+
             max_results=max_results
         )
 
         return {
+
             "channel_name":
                 channel_name,
 
@@ -599,7 +860,7 @@ def get_channel_complete_data(
     except Exception as error:
 
         log_service_message(
-            f"Channel Complete Data Error: {error}"
+            f"Channel Complete Data Error: {str(error)}"
         )
 
         return None
@@ -616,12 +877,13 @@ def get_multiple_channels_data(
 
         try:
 
-            channel_data = (
-                get_channel_complete_data(
-                    channel_name,
-                    handle,
-                    max_results=max_results
-                )
+            channel_data = get_channel_complete_data(
+
+                channel_name,
+
+                handle,
+
+                max_results=max_results
             )
 
             if channel_data:
@@ -643,7 +905,7 @@ def get_multiple_channels_data(
         except Exception as error:
 
             log_service_message(
-                f"Multi-channel Fetch Error for {channel_name}: {error}"
+                f"Multi-channel Fetch Error for {channel_name}: {str(error)}"
             )
 
     return all_channels_data
@@ -679,6 +941,7 @@ def build_competitive_summary(
             )
 
             summary.append({
+
                 "channel_name":
                     channel_name,
 
@@ -712,7 +975,7 @@ def build_competitive_summary(
         except Exception as error:
 
             log_service_message(
-                f"Competitive Summary Error: {error}"
+                f"Competitive Summary Error: {str(error)}"
             )
 
     return summary

@@ -1,22 +1,33 @@
 import os
+import sys
 import time
 import traceback
 
 from datetime import datetime
 
 from app.services.youtube_service import (
+
     CHANNELS,
+
     get_channel_id,
+
     get_latest_videos,
+
     get_channel_statistics,
+
     get_competitor_channels_data,
+
     build_competitive_summary
 )
 
 from app.analytics.metrics_engine import (
+
     enrich_video_metrics,
+
     generate_channel_summary,
+
     calculate_channel_health_score,
+
     classify_channel_health
 )
 
@@ -25,21 +36,38 @@ from app.agents.report_generator import (
 )
 
 from app.utils.report_exporter import (
-    export_to_docx,
-    export_to_pdf
+    export_reports
 )
 
 from app.utils.cache_manager import (
+
     warm_cache,
-    get_cache_statistics
+
+    get_cache_statistics,
+
+    cache_health_check
 )
+
+from app.utils.config import (
+
+    CONFIG_SUMMARY,
+
+    validate_configuration,
+
+    APP_TITLE
+)
+
+
+LOG_FILE = "logs/main.log"
 
 
 def ensure_directories():
 
     directories = [
-        "reports",
-        "logs"
+
+        "logs",
+
+        "reports"
     ]
 
     for directory in directories:
@@ -50,26 +78,49 @@ def ensure_directories():
         )
 
 
-def write_log(message):
+def write_log(
+    message,
+    level="INFO"
+):
+
+    ensure_directories()
 
     timestamp = datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
     formatted_message = (
-        f"[{timestamp}] {message}"
+
+        f"[{level}] "
+
+        f"[{timestamp}] "
+
+        f"{message}"
     )
 
-    print(formatted_message)
+    print(
+        formatted_message
+    )
 
-    with open(
-        "logs/main.log",
-        "a",
-        encoding="utf-8"
-    ) as log_file:
+    try:
 
-        log_file.write(
-            formatted_message + "\n"
+        with open(
+
+            LOG_FILE,
+
+            "a",
+
+            encoding="utf-8"
+        ) as log_file:
+
+            log_file.write(
+                formatted_message + "\n"
+            )
+
+    except Exception as error:
+
+        print(
+            f"[LOGGING ERROR] {str(error)}"
         )
 
 
@@ -84,31 +135,92 @@ def print_section(title):
     print("=" * 100)
 
 
+def startup_validation():
+
+    print_section(
+        "SYSTEM STARTUP VALIDATION"
+    )
+
+    validation = validate_configuration()
+
+    if not validation["valid"]:
+
+        for error in validation["errors"]:
+
+            write_log(
+                error,
+                level="ERROR"
+            )
+
+        raise Exception(
+            "Configuration validation failed."
+        )
+
+    if validation["warnings"]:
+
+        for warning in validation["warnings"]:
+
+            write_log(
+                warning,
+                level="WARNING"
+            )
+
+    write_log(
+        "Configuration validation completed successfully"
+    )
+
+
+def display_configuration_summary():
+
+    print_section(
+        "PLATFORM CONFIGURATION"
+    )
+
+    for key, value in CONFIG_SUMMARY.items():
+
+        print(
+            f"{key}: {value}"
+        )
+
+
 def display_channel_statistics(stats):
 
     print("\nCHANNEL STATISTICS")
 
     print("-" * 100)
 
-    print(
-        f"Subscribers: "
-        f"{stats.get('subscribers', 'N/A')}"
-    )
+    metrics = {
 
-    print(
-        f"Total Views: "
-        f"{stats.get('total_views', 'N/A')}"
-    )
+        "Subscribers":
+            stats.get(
+                "subscribers",
+                "N/A"
+            ),
 
-    print(
-        f"Total Videos: "
-        f"{stats.get('total_videos', 'N/A')}"
-    )
+        "Total Views":
+            stats.get(
+                "total_views",
+                "N/A"
+            ),
 
-    print(
-        f"Country: "
-        f"{stats.get('country', 'N/A')}"
-    )
+        "Total Videos":
+            stats.get(
+                "total_videos",
+                "N/A"
+            ),
+
+        "Country":
+            stats.get(
+                "country",
+                "N/A"
+            )
+    }
+
+    for key, value in metrics.items():
+
+        print(
+            f"{key}: {value}"
+        )
 
 
 def display_channel_summary(summary):
@@ -117,158 +229,186 @@ def display_channel_summary(summary):
 
     print("-" * 100)
 
-    print(
-        f"Total Videos: "
-        f"{summary.get('total_videos', 0)}"
-    )
+    metrics = {
 
-    print(
-        f"Total Views: "
-        f"{summary.get('total_views', 0)}"
-    )
+        "Total Videos":
+            summary.get(
+                "total_videos",
+                0
+            ),
 
-    print(
-        f"Average Engagement: "
-        f"{summary.get('average_engagement', 0)}%"
-    )
+        "Total Views":
+            summary.get(
+                "total_views",
+                0
+            ),
 
-    print(
-        f"Average Performance Score: "
-        f"{summary.get('average_performance_score', 0)}"
-    )
+        "Average Engagement":
+            f"{summary.get('average_engagement', 0)}%",
 
-    print(
-        f"Strong Videos: "
-        f"{summary.get('strong_videos', 0)}"
-    )
+        "Average Performance Score":
+            summary.get(
+                "average_performance_score",
+                0
+            ),
 
-    print(
-        f"Underperforming Videos: "
-        f"{summary.get('underperforming_videos', 0)}"
-    )
+        "Strong Videos":
+            summary.get(
+                "strong_videos",
+                0
+            ),
 
-    print(
-        f"Channel Health Score: "
-        f"{summary.get('channel_health_score', 0)}"
-    )
+        "Underperforming Videos":
+            summary.get(
+                "underperforming_videos",
+                0
+            ),
 
-    print(
-        f"Channel Health Status: "
-        f"{summary.get('channel_health', 'Unknown')}"
-    )
+        "Channel Health Score":
+            summary.get(
+                "channel_health_score",
+                0
+            ),
+
+        "Channel Health":
+            summary.get(
+                "channel_health",
+                "Unknown"
+            )
+    }
+
+    for key, value in metrics.items():
+
+        print(
+            f"{key}: {value}"
+        )
 
 
 def display_video_metrics(video):
 
     print("\n" + "-" * 100)
 
-    print(
-        f"Title: {video['title']}"
-    )
+    metrics = {
 
-    print(
-        f"Published At: {video['published_at']}"
-    )
+        "Title":
+            video.get(
+                "title",
+                "Unknown"
+            ),
 
-    print(
-        f"Views: {video['views']}"
-    )
+        "Published At":
+            video.get(
+                "published_at",
+                "N/A"
+            ),
 
-    print(
-        f"Likes: {video['likes']}"
-    )
+        "Views":
+            video.get(
+                "views",
+                0
+            ),
 
-    print(
-        f"Comments: {video['comments']}"
-    )
+        "Likes":
+            video.get(
+                "likes",
+                0
+            ),
 
-    print(
-        f"Engagement Rate: "
-        f"{video['engagement_rate']}%"
-    )
+        "Comments":
+            video.get(
+                "comments",
+                0
+            ),
 
-    print(
-        f"Views Per Day: "
-        f"{video['views_per_day']}"
-    )
+        "Engagement Rate":
+            f"{video.get('engagement_rate', 0)}%",
 
-    print(
-        f"Performance Score: "
-        f"{video['performance_score']}"
-    )
+        "Views Per Day":
+            video.get(
+                "views_per_day",
+                0
+            ),
 
-    print(
-        f"Classification: "
-        f"{video['classification']}"
-    )
+        "Performance Score":
+            video.get(
+                "performance_score",
+                0
+            ),
 
-    print(
-        f"Growth Velocity: "
-        f"{video['growth_velocity']}"
-    )
+        "Classification":
+            video.get(
+                "classification",
+                "Unknown"
+            ),
 
-    print(
-        f"Momentum: "
-        f"{video['momentum_classification']}"
-    )
+        "Growth Velocity":
+            video.get(
+                "growth_velocity",
+                "Unknown"
+            ),
 
-    print(
-        f"Retention Signal: "
-        f"{video['estimated_retention_signal']}"
-    )
+        "Momentum":
+            video.get(
+                "momentum_classification",
+                "Unknown"
+            ),
 
-    print(
-        f"Audience Signal: "
-        f"{video['audience_signal_strength']}"
-    )
+        "Retention Signal":
+            video.get(
+                "estimated_retention_signal",
+                "Unknown"
+            ),
 
-    print(
-        f"Video URL: "
-        f"{video['video_url']}"
-    )
+        "Audience Signal":
+            video.get(
+                "audience_signal_strength",
+                "Unknown"
+            ),
+
+        "Video URL":
+            video.get(
+                "video_url",
+                "Unavailable"
+            )
+    }
+
+    for key, value in metrics.items():
+
+        print(
+            f"{key}: {value}"
+        )
 
 
-def export_reports(
-    report,
-    channel_name
-):
+def validate_report(report):
 
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
+    if not report:
 
-    pdf_filename = (
-        f"reports/{channel_name}_{timestamp}.pdf"
-    )
+        return False
 
-    docx_filename = (
-        f"reports/{channel_name}_{timestamp}.docx"
-    )
+    invalid_patterns = [
 
-    export_to_pdf(
-        report,
-        pdf_filename,
-        channel_name
-    )
+        "quota",
 
-    export_to_docx(
-        report,
-        docx_filename,
-        channel_name
-    )
+        "resource_exhausted",
 
-    write_log(
-        f"Reports exported for {channel_name}"
-    )
+        "report generation error",
 
-    print(
-        f"\nPDF Report Saved: "
-        f"{pdf_filename}"
-    )
+        "temporarily unavailable",
 
-    print(
-        f"DOCX Report Saved: "
-        f"{docx_filename}"
+        "429",
+
+        "503"
+    ]
+
+    report_text = str(
+        report
+    ).lower()
+
+    return not any(
+
+        pattern in report_text
+
+        for pattern in invalid_patterns
     )
 
 
@@ -276,6 +416,8 @@ def process_channel(
     channel_name,
     handle
 ):
+
+    channel_start_time = time.time()
 
     try:
 
@@ -293,11 +435,9 @@ def process_channel(
 
         if not channel_id:
 
-            write_log(
-                f"Failed to fetch channel ID for {channel_name}"
+            raise Exception(
+                "Unable to fetch channel ID."
             )
-
-            return
 
         print(
             f"\nChannel ID: {channel_id}"
@@ -314,17 +454,17 @@ def process_channel(
         )
 
         videos = get_latest_videos(
+
             channel_id,
+
             max_results=10
         )
 
         if not videos:
 
-            write_log(
-                f"No videos found for {channel_name}"
+            raise Exception(
+                "No videos found."
             )
-
-            return
 
         enriched_videos = (
             enrich_video_metrics(
@@ -357,30 +497,90 @@ def process_channel(
         )
 
         report = generate_channel_report(
+
             channel_name,
+
             enriched_videos
         )
 
         print(report)
 
-        export_reports(
-            report,
-            channel_name
+        exported_files = {}
+
+        if validate_report(report):
+
+            exported_files = export_reports(
+
+                report,
+
+                channel_name
+            )
+
+            write_log(
+                f"Reports exported successfully for {channel_name}"
+            )
+
+        else:
+
+            write_log(
+                f"Report validation failed for {channel_name}",
+                level="WARNING"
+            )
+
+        execution_time = round(
+
+            time.time()
+            -
+            channel_start_time,
+
+            2
         )
 
         write_log(
-            f"Analysis completed successfully for {channel_name}"
+            f"Analysis completed for {channel_name} | Execution Time={execution_time}s"
         )
+
+        return {
+
+            "success":
+                True,
+
+            "channel":
+                channel_name,
+
+            "summary":
+                channel_summary,
+
+            "report_exports":
+                exported_files,
+
+            "execution_time":
+                execution_time
+        }
 
     except Exception as error:
 
         write_log(
-            f"Main Pipeline Error for {channel_name}: {str(error)}"
+            f"Channel Processing Error for {channel_name}: {str(error)}",
+            level="ERROR"
         )
 
         write_log(
-            traceback.format_exc()
+            traceback.format_exc(),
+            level="ERROR"
         )
+
+        return {
+
+            "success":
+                False,
+
+            "channel":
+                channel_name,
+
+            "error":
+                str(error)
+        }
 
 
 def run_competitive_benchmark():
@@ -405,44 +605,68 @@ def run_competitive_benchmark():
 
             print("\n" + "-" * 100)
 
-            print(
-                f"Competitor: "
-                f"{competitor['channel_name']}"
-            )
+            metrics = {
 
-            print(
-                f"Subscribers: "
-                f"{competitor['subscribers']}"
-            )
+                "Competitor":
+                    competitor.get(
+                        "channel_name",
+                        "Unknown"
+                    ),
 
-            print(
-                f"Total Views: "
-                f"{competitor['total_views']}"
-            )
+                "Subscribers":
+                    competitor.get(
+                        "subscribers",
+                        0
+                    ),
 
-            print(
-                f"Total Videos: "
-                f"{competitor['total_videos']}"
-            )
+                "Total Views":
+                    competitor.get(
+                        "total_views",
+                        0
+                    ),
 
-            print(
-                f"Latest Videos Analyzed: "
-                f"{competitor['latest_videos_analyzed']}"
-            )
+                "Total Videos":
+                    competitor.get(
+                        "total_videos",
+                        0
+                    ),
+
+                "Latest Videos Analyzed":
+                    competitor.get(
+                        "latest_videos_analyzed",
+                        0
+                    )
+            }
+
+            for key, value in metrics.items():
+
+                print(
+                    f"{key}: {value}"
+                )
+
+        return benchmark_summary
 
     except Exception as error:
 
         write_log(
-            f"Competitive Benchmark Error: {str(error)}"
+            f"Competitive Benchmark Error: {str(error)}",
+            level="ERROR"
         )
+
+        return []
 
 
 def display_runtime_summary(
-    start_time
+    start_time,
+    pipeline_results
 ):
 
     execution_time = round(
-        time.time() - start_time,
+
+        time.time()
+        -
+        start_time,
+
         2
     )
 
@@ -450,23 +674,85 @@ def display_runtime_summary(
         get_cache_statistics()
     )
 
+    cache_health = (
+        cache_health_check()
+    )
+
+    successful_channels = len([
+
+        result
+
+        for result in pipeline_results
+
+        if result.get(
+            "success"
+        )
+    ])
+
+    failed_channels = len([
+
+        result
+
+        for result in pipeline_results
+
+        if not result.get(
+            "success"
+        )
+    ])
+
     print_section(
         "SYSTEM EXECUTION SUMMARY"
     )
 
-    print(
-        f"Execution Time: "
-        f"{execution_time} seconds"
-    )
+    metrics = {
 
-    print(
-        f"Active Cache Entries: "
-        f"{cache_stats['active_entries']}"
-    )
+        "Execution Time":
+            f"{execution_time} seconds",
 
-    print(
-        f"Cache Size: "
-        f"{cache_stats['total_cache_items']}"
+        "Successful Channels":
+            successful_channels,
+
+        "Failed Channels":
+            failed_channels,
+
+        "Active Cache Entries":
+            cache_stats.get(
+                "active_entries",
+                0
+            ),
+
+        "Cache Size":
+            cache_stats.get(
+                "total_cache_items",
+                0
+            ),
+
+        "Cache Healthy":
+            cache_health.get(
+                "healthy",
+                False
+            )
+    }
+
+    for key, value in metrics.items():
+
+        print(
+            f"{key}: {value}"
+        )
+
+
+def initialize_runtime():
+
+    ensure_directories()
+
+    warm_cache()
+
+    startup_validation()
+
+    display_configuration_summary()
+
+    write_log(
+        "Runtime initialized successfully"
     )
 
 
@@ -474,46 +760,80 @@ def main():
 
     start_time = time.time()
 
-    ensure_directories()
+    pipeline_results = []
 
-    warm_cache()
+    try:
 
-    print_section(
-        "MOVEUP MEDIA AI CONTENT OPS PLATFORM"
-    )
+        initialize_runtime()
 
-    print(
-        "\nInitializing autonomous analytics pipeline...\n"
-    )
-
-    write_log(
-        "Main execution started"
-    )
-
-    for channel_name, handle in CHANNELS.items():
-
-        process_channel(
-            channel_name,
-            handle
+        print_section(
+            APP_TITLE
         )
 
-    run_competitive_benchmark()
+        print(
+            "\nInitializing autonomous analytics pipeline...\n"
+        )
 
-    display_runtime_summary(
-        start_time
-    )
+        write_log(
+            "Main execution started"
+        )
 
-    print_section(
-        "AUTONOMOUS ANALYSIS COMPLETED"
-    )
+        for channel_name, handle in CHANNELS.items():
 
-    print(
-        "\nAll reports generated successfully.\n"
-    )
+            result = process_channel(
 
-    write_log(
-        "Main execution completed"
-    )
+                channel_name,
+
+                handle
+            )
+
+            pipeline_results.append(
+                result
+            )
+
+        run_competitive_benchmark()
+
+        display_runtime_summary(
+
+            start_time,
+
+            pipeline_results
+        )
+
+        print_section(
+            "AUTONOMOUS ANALYSIS COMPLETED"
+        )
+
+        print(
+            "\nAll operational workflows completed.\n"
+        )
+
+        write_log(
+            "Main execution completed successfully"
+        )
+
+    except KeyboardInterrupt:
+
+        write_log(
+            "Execution interrupted by user",
+            level="WARNING"
+        )
+
+        sys.exit(0)
+
+    except Exception as error:
+
+        write_log(
+            f"Critical Main Execution Error: {str(error)}",
+            level="CRITICAL"
+        )
+
+        write_log(
+            traceback.format_exc(),
+            level="CRITICAL"
+        )
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":

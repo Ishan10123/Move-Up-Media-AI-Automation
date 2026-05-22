@@ -3,7 +3,7 @@ import time
 from google import genai
 
 from app.utils.config import (
-    GEMINI_API_KEY,
+    GEMINI_API_KEYS,
     PRIMARY_MODEL,
     FALLBACK_MODEL,
     MAX_RETRIES,
@@ -19,9 +19,11 @@ from app.utils.cache_manager import (
 )
 
 
-client = genai.Client(
-    api_key=GEMINI_API_KEY
-)
+def create_client(api_key):
+
+    return genai.Client(
+        api_key=api_key
+    )
 
 
 def build_chat_prompt(
@@ -34,19 +36,18 @@ You are an autonomous AI media strategist working for MoveUp Media.
 
 Responsibilities:
 - analyze YouTube operational analytics
-- detect performance patterns
-- identify audience behavior trends
-- recommend optimization strategies
-- provide concise executive intelligence
+- identify audience behavior patterns
+- detect content momentum
+- recommend operational improvements
+- provide executive intelligence
 
 Rules:
 - use only provided analytics
 - avoid hallucinations
-- be concise
+- concise responses only
+- business-oriented
 - analytical
 - actionable
-- business-oriented
-- operationally focused
 
 Question:
 {question}
@@ -76,8 +77,25 @@ def extract_response_text(response):
 
                 return response.text.strip()
 
+        if hasattr(response, "candidates"):
+
+            candidates = response.candidates
+
+            if candidates:
+
+                content = (
+                    candidates[0]
+                    .content
+                    .parts[0]
+                    .text
+                )
+
+                if content:
+
+                    return content.strip()
+
         return (
-            "No AI response generated."
+            "AI assistant could not generate a response."
         )
 
     except Exception:
@@ -91,23 +109,25 @@ def is_retryable_error(error):
 
     error_text = str(error).lower()
 
-    retry_keywords = [
+    retryable_keywords = [
         "429",
         "503",
-        "resource_exhausted",
         "quota",
+        "resource_exhausted",
         "unavailable",
         "overloaded",
-        "timeout"
+        "timeout",
+        "internal"
     ]
 
     return any(
         keyword in error_text
-        for keyword in retry_keywords
+        for keyword in retryable_keywords
     )
 
 
-def generate_with_model(
+def generate_with_client(
+    client,
     model_name,
     prompt
 ):
@@ -138,43 +158,63 @@ def generate_ai_response(prompt):
 
     last_error = None
 
-    for model_name in models_to_try:
+    for api_key in GEMINI_API_KEYS:
 
-        retries = (
-            MAX_RETRIES
-            if ENABLE_AI_RETRY
-            else 1
+        client = create_client(
+            api_key
         )
 
-        for attempt in range(retries):
+        for model_name in models_to_try:
 
-            try:
+            retries = (
+                MAX_RETRIES
+                if ENABLE_AI_RETRY
+                else 1
+            )
 
-                return generate_with_model(
-                    model_name,
-                    prompt
-                )
+            for attempt in range(retries):
 
-            except Exception as error:
+                try:
 
-                last_error = error
-
-                if not is_retryable_error(
-                    error
-                ):
-
-                    break
-
-                if attempt < retries - 1:
-
-                    wait_time = (
-                        RETRY_DELAY_SECONDS
-                        * (attempt + 1)
+                    response = generate_with_client(
+                        client,
+                        model_name,
+                        prompt
                     )
 
-                    time.sleep(
-                        wait_time
+                    if response:
+
+                        return response
+
+                except Exception as error:
+
+                    last_error = error
+
+                    print(
+                        f"[AI CHAT ERROR] "
+                        f"Model={model_name} "
+                        f"Attempt={attempt + 1} "
+                        f"Error={str(error)}"
                     )
+
+                    if not is_retryable_error(
+                        error
+                    ):
+
+                        break
+
+                    if attempt < retries - 1:
+
+                        wait_time = (
+                            RETRY_DELAY_SECONDS
+                            * (attempt + 1)
+                        )
+
+                        time.sleep(
+                            wait_time
+                        )
+
+                    continue
 
     return handle_ai_error(
         last_error
@@ -185,25 +225,36 @@ def handle_ai_error(error):
 
     error_text = str(error)
 
-    if "429" in error_text:
+    if (
+        "429" in error_text
+        or
+        "quota" in error_text.lower()
+    ):
 
         return (
-            "AI quota limit temporarily exceeded due to high usage volume. "
-            "Please retry in a few moments."
-        )
-
-    if "503" in error_text:
-
-        return (
-            "AI service is currently experiencing unusually high demand. "
+            "AI quota limit temporarily exceeded across active API pools. "
             "Please retry shortly."
         )
 
-    if "resource_exhausted" in error_text.lower():
+    if (
+        "503" in error_text
+        or
+        "unavailable" in error_text.lower()
+    ):
 
         return (
-            "AI resources are temporarily exhausted. "
-            "Please retry after some time."
+            "AI assistant service is temporarily overloaded. "
+            "Please retry in a few moments."
+        )
+
+    if (
+        "resource_exhausted"
+        in error_text.lower()
+    ):
+
+        return (
+            "AI infrastructure resources are temporarily exhausted. "
+            "Please retry shortly."
         )
 
     return (
@@ -236,27 +287,9 @@ def ask_ai(
             context
         )
 
-        response = client.models.generate_content(
-            model=PRIMARY_MODEL,
-            contents=prompt
+        final_response = generate_ai_response(
+            prompt
         )
-
-        final_response = extract_response_text(
-            response
-        )
-
-        if (
-            not final_response
-            or
-            "quota" in final_response.lower()
-            or
-            "resource_exhausted"
-            in final_response.lower()
-        ):
-
-            return (
-                "AI assistant is temporarily unavailable due to API usage limits. Please retry shortly."
-            )
 
         set_cache(
             cache_key,
@@ -268,34 +301,10 @@ def ask_ai(
 
     except Exception as error:
 
-        error_text = str(error)
-
         print(
-            f"[AI Assistant Error] {error_text}"
+            f"[CHAT_AGENT_FATAL] {str(error)}"
         )
 
-        if (
-            "429" in error_text
-            or
-            "RESOURCE_EXHAUSTED"
-            in error_text
-        ):
-
-            return (
-                "AI assistant quota temporarily exceeded. Please retry in a few minutes."
-            )
-
-        if (
-            "503" in error_text
-            or
-            "UNAVAILABLE"
-            in error_text
-        ):
-
-            return (
-                "AI assistant service temporarily overloaded. Please retry shortly."
-            )
-
-        return (
-            f"AI Assistant Error: {error_text}"
+        return handle_ai_error(
+            error
         )

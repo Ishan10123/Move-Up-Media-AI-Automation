@@ -1,6 +1,11 @@
-from statistics import mean
+import json
 
-from app.agents.chat_agent import ask_ai
+from statistics import mean
+from datetime import datetime
+
+from app.agents.chat_agent import (
+    ask_ai
+)
 
 from app.agents.query_parser import (
     parse_user_query
@@ -13,68 +18,126 @@ from app.utils.cache_manager import (
 )
 
 
+def safe_float(value):
+
+    try:
+
+        return float(value)
+
+    except Exception:
+
+        return 0.0
+
+
+def safe_int(value):
+
+    try:
+
+        return int(value)
+
+    except Exception:
+
+        return 0
+
+
 def calculate_channel_summary(videos):
 
     if not videos:
 
-        return {}
+        return {
+
+            "total_views": 0,
+            "average_views": 0,
+            "average_engagement": 0,
+            "average_performance_score": 0,
+            "strong_videos": 0,
+            "underperforming_videos": 0
+        }
 
     total_views = sum(
-        int(video.get("views", 0))
+
+        safe_int(
+            video.get(
+                "views",
+                0
+            )
+        )
+
         for video in videos
     )
 
     average_views = round(
+
         mean([
-            int(video.get("views", 0))
+
+            safe_int(
+                video.get(
+                    "views",
+                    0
+                )
+            )
+
             for video in videos
         ]),
         2
     )
 
     average_engagement = round(
+
         mean([
-            float(
+
+            safe_float(
                 video.get(
                     "engagement_rate",
                     0
                 )
             )
+
             for video in videos
         ]),
         2
     )
 
     average_performance = round(
+
         mean([
-            float(
+
+            safe_float(
                 video.get(
                     "performance_score",
                     0
                 )
             )
+
             for video in videos
         ]),
         2
     )
 
     strong_videos = len([
+
         video
+
         for video in videos
+
         if video.get(
             "classification"
         ) == "Strong"
     ])
 
     underperforming_videos = len([
+
         video
+
         for video in videos
+
         if video.get(
             "classification"
         ) == "Underperforming"
     ])
 
     return {
+
         "total_views":
             total_views,
 
@@ -100,14 +163,25 @@ def get_top_videos(
     limit=3
 ):
 
+    if not videos:
+
+        return []
+
     return sorted(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "performance_score",
-            0
+
+        safe_float(
+            x.get(
+                "performance_score",
+                0
+            )
         ),
+
         reverse=True
+
     )[:limit]
 
 
@@ -116,14 +190,40 @@ def get_underperforming_videos(
     limit=3
 ):
 
+    if not videos:
+
+        return []
+
     return sorted(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "performance_score",
-            0
+
+        safe_float(
+            x.get(
+                "performance_score",
+                0
+            )
         )
+
     )[:limit]
+
+
+def parse_datetime(value):
+
+    try:
+
+        return datetime.fromisoformat(
+            value.replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+    except Exception:
+
+        return datetime.min
 
 
 def get_video_by_position(
@@ -137,12 +237,18 @@ def get_video_by_position(
         return None
 
     sorted_videos = sorted(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "published_at",
-            ""
+
+        parse_datetime(
+            x.get(
+                "published_at",
+                ""
+            )
         ),
+
         reverse=True
     )
 
@@ -153,13 +259,56 @@ def get_video_by_position(
         )
 
     if (
+
         position is not None
-        and 0 <= position < len(sorted_videos)
+        and
+        0 <= position < len(sorted_videos)
+
     ):
 
         return sorted_videos[position]
 
     return sorted_videos[0]
+
+
+def compress_video_data(
+    videos,
+    limit=5
+):
+
+    compressed = []
+
+    for video in videos[:limit]:
+
+        compressed.append({
+
+            "title":
+                video.get(
+                    "title"
+                ),
+
+            "views":
+                video.get(
+                    "views"
+                ),
+
+            "engagement_rate":
+                video.get(
+                    "engagement_rate"
+                ),
+
+            "performance_score":
+                video.get(
+                    "performance_score"
+                ),
+
+            "classification":
+                video.get(
+                    "classification"
+                )
+        })
+
+    return compressed
 
 
 def build_compare_context(
@@ -170,11 +319,18 @@ def build_compare_context(
 
     for channel_name, videos in all_channel_data.items():
 
-        comparison_data[channel_name] = (
-            calculate_channel_summary(
-                videos
-            )
-        )
+        comparison_data[channel_name] = {
+
+            "summary":
+                calculate_channel_summary(
+                    videos
+                ),
+
+            "top_videos":
+                compress_video_data(
+                    get_top_videos(videos)
+                )
+        }
 
     return comparison_data
 
@@ -185,16 +341,20 @@ def build_video_lookup_context(
 ):
 
     selected_video = get_video_by_position(
+
         videos,
+
         parsed_query.get(
             "video_position"
         ),
+
         parsed_query.get(
             "direction"
         )
     )
 
     return {
+
         "selected_video":
             selected_video,
 
@@ -209,9 +369,10 @@ def build_video_lookup_context(
 def build_top_videos_context(videos):
 
     return {
+
         "top_videos":
-            get_top_videos(
-                videos
+            compress_video_data(
+                get_top_videos(videos)
             )
     }
 
@@ -219,42 +380,60 @@ def build_top_videos_context(videos):
 def build_underperforming_context(videos):
 
     return {
+
         "underperforming_videos":
-            get_underperforming_videos(
-                videos
+            compress_video_data(
+                get_underperforming_videos(videos)
             )
     }
 
 
 def build_engagement_context(videos):
 
+    if not videos:
+
+        return {}
+
     sorted_videos = sorted(
+
         videos,
+
         key=lambda x:
-        x.get(
-            "engagement_rate",
-            0
+
+        safe_float(
+            x.get(
+                "engagement_rate",
+                0
+            )
         ),
+
         reverse=True
     )
 
     return {
+
         "highest_engagement":
-            sorted_videos[:3],
+            compress_video_data(
+                sorted_videos[:3]
+            ),
 
         "lowest_engagement":
-            sorted_videos[-3:],
-
+            compress_video_data(
+                sorted_videos[-3:]
+            ),
 
         "average_engagement":
             round(
+
                 mean([
-                    float(
+
+                    safe_float(
                         video.get(
                             "engagement_rate",
                             0
                         )
                     )
+
                     for video in videos
                 ]),
                 2
@@ -270,46 +449,68 @@ def build_content_strategy_context(videos):
     )
 
     return {
+
         "top_titles": [
+
             video.get(
                 "title",
                 ""
             )
+
             for video in top_videos
         ],
 
         "top_video_data":
-            top_videos
+            compress_video_data(
+                top_videos
+            )
     }
 
 
 def build_recommendation_context(videos):
 
     return {
+
         "strong_patterns":
-            get_top_videos(videos),
+            compress_video_data(
+                get_top_videos(videos)
+            ),
 
         "weak_patterns":
-            get_underperforming_videos(videos)
+            compress_video_data(
+                get_underperforming_videos(videos)
+            )
     }
 
 
 def build_summary_context(videos):
 
-    return calculate_channel_summary(
-        videos
-    )
+    return {
+
+        "channel_summary":
+            calculate_channel_summary(
+                videos
+            ),
+
+        "top_videos":
+            compress_video_data(
+                get_top_videos(videos)
+            )
+    }
 
 
 def build_upload_consistency_context(videos):
 
     return {
+
         "publish_dates": [
+
             video.get(
                 "published_at",
                 ""
             )
-            for video in videos
+
+            for video in videos[:10]
         ],
 
         "total_uploads":
@@ -324,68 +525,102 @@ def generate_dynamic_context(
     all_channel_data
 ):
 
-    intent = parsed_query.get(
-        "intent"
-    )
+    try:
 
-    if intent == "compare_channels":
-
-        context = build_compare_context(
-            all_channel_data
+        intent = parsed_query.get(
+            "intent"
         )
 
-    elif parsed_query.get(
-        "requires_video_lookup"
-    ):
+        if intent == "compare_channels":
 
-        context = build_video_lookup_context(
-            parsed_query,
-            selected_channel_data
-        )
+            context = build_compare_context(
+                all_channel_data
+            )
 
-    elif intent == "top_videos":
+        elif parsed_query.get(
+            "requires_video_lookup"
+        ):
 
-        context = build_top_videos_context(
-            selected_channel_data
-        )
+            context = build_video_lookup_context(
+                parsed_query,
+                selected_channel_data
+            )
 
-    elif intent == "underperforming_videos":
+        elif intent == "top_videos":
 
-        context = build_underperforming_context(
-            selected_channel_data
-        )
+            context = build_top_videos_context(
+                selected_channel_data
+            )
 
-    elif intent == "engagement_analysis":
+        elif intent == "underperforming_videos":
 
-        context = build_engagement_context(
-            selected_channel_data
-        )
+            context = build_underperforming_context(
+                selected_channel_data
+            )
 
-    elif intent == "content_strategy":
+        elif intent == "engagement_analysis":
 
-        context = build_content_strategy_context(
-            selected_channel_data
-        )
+            context = build_engagement_context(
+                selected_channel_data
+            )
 
-    elif intent == "recommendations":
+        elif intent == "content_strategy":
 
-        context = build_recommendation_context(
-            selected_channel_data
-        )
+            context = build_content_strategy_context(
+                selected_channel_data
+            )
 
-    elif intent == "upload_consistency":
+        elif intent == "recommendations":
 
-        context = build_upload_consistency_context(
-            selected_channel_data
-        )
+            context = build_recommendation_context(
+                selected_channel_data
+            )
 
-    else:
+        elif intent == "upload_consistency":
 
-        context = build_summary_context(
-            selected_channel_data
-        )
+            context = build_upload_consistency_context(
+                selected_channel_data
+            )
 
-    return context
+        else:
+
+            context = build_summary_context(
+                selected_channel_data
+            )
+
+        return {
+
+            "channel_name":
+                selected_channel,
+
+            "analysis_type":
+                intent,
+
+            "generated_at":
+                str(datetime.utcnow()),
+
+            "context":
+                context
+        }
+
+    except Exception as error:
+
+        return {
+
+            "channel_name":
+                selected_channel,
+
+            "analysis_type":
+                "fallback_summary",
+
+            "error":
+                str(error),
+
+            "context":
+                build_summary_context(
+                    selected_channel_data
+                )
+        }
 
 
 def route_user_query(
@@ -396,8 +631,10 @@ def route_user_query(
 ):
 
     cache_key = generate_cache_key(
+
         "agent",
-        question
+
+        f"{selected_channel}:{question}"
     )
 
     cached_response = get_cache(
@@ -413,7 +650,9 @@ def route_user_query(
     )
 
     dynamic_context = (
+
         generate_dynamic_context(
+
             parsed_query,
             selected_channel,
             selected_channel_data,
@@ -421,12 +660,22 @@ def route_user_query(
         )
     )
 
+    context_payload = json.dumps(
+
+        dynamic_context,
+
+        indent=2,
+
+        default=str
+    )
+
     response = ask_ai(
         question,
-        dynamic_context
+        context_payload
     )
 
     final_response = {
+
         "intent":
             parsed_query.get(
                 "intent"
@@ -440,9 +689,12 @@ def route_user_query(
     }
 
     set_cache(
+
         cache_key,
+
         final_response,
-        expiry=300
+
+        expiry=600
     )
 
     return final_response

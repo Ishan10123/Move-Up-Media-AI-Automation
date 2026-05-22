@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import time
+import traceback
 
 sys.path.append(
     os.path.abspath(
@@ -48,20 +49,27 @@ from app.utils.report_exporter import (
 )
 
 from app.utils.cache_manager import (
-    get_cache_statistics
+    get_cache_statistics,
+    cache_health_check
 )
 
 from app.utils.config import (
     AI_REQUEST_COOLDOWN,
-    MAX_CHAT_HISTORY
+    MAX_CHAT_HISTORY,
+    APP_TITLE,
+    COMPANY_NAME,
+    PRIMARY_MODEL,
+    FALLBACK_MODEL,
+    get_total_available_keys
 )
 
 
 st.set_page_config(
-    page_title="MoveUp Media AI Ops Platform",
+    page_title=APP_TITLE,
     page_icon="📊",
     layout="wide"
 )
+
 
 st.markdown(
     """
@@ -87,7 +95,7 @@ st.markdown(
     }
 
     .section-title {
-        font-size: 28px;
+        font-size: 30px;
         font-weight: 700;
         margin-bottom: 10px;
     }
@@ -106,9 +114,13 @@ st.markdown(
 def initialize_session():
 
     defaults = {
+
         "chat_history": [],
+
         "generated_reports": {},
+
         "last_ai_request": 0,
+
         "benchmark_loaded": False
     }
 
@@ -119,7 +131,115 @@ def initialize_session():
             st.session_state[key] = value
 
 
+@st.cache_resource
+def initialize_runtime_resources():
+
+    return {
+        "initialized": True
+    }
+
+
 initialize_session()
+
+initialize_runtime_resources()
+
+
+def safe_dataframe(data):
+
+    try:
+
+        if data is None:
+
+            return pd.DataFrame()
+
+        dataframe = pd.DataFrame(data)
+
+        if dataframe.empty:
+
+            return pd.DataFrame()
+
+        return dataframe
+
+    except Exception:
+
+        return pd.DataFrame()
+
+
+def safe_numeric_conversion(
+    dataframe,
+    columns
+):
+
+    try:
+
+        for column in columns:
+
+            if column in dataframe.columns:
+
+                dataframe[column] = pd.to_numeric(
+                    dataframe[column],
+                    errors="coerce"
+                ).fillna(0)
+
+        return dataframe
+
+    except Exception:
+
+        return dataframe
+
+
+def safe_plotly_chart(figure):
+
+    try:
+
+        st.plotly_chart(
+            figure,
+            width="stretch"
+        )
+
+    except Exception as error:
+
+        st.warning(
+            f"Visualization unavailable: {str(error)}"
+        )
+
+
+def sanitize_ai_response(response):
+
+    if not response:
+
+        return (
+            "AI response unavailable."
+        )
+
+    response = str(response).strip()
+
+    blocked_patterns = [
+
+        "resource_exhausted",
+
+        "quota",
+
+        "429",
+
+        "503",
+
+        "404",
+
+        "model not found",
+
+        "rate limit"
+    ]
+
+    for pattern in blocked_patterns:
+
+        if pattern in response.lower():
+
+            return (
+                "AI service temporarily unavailable. Please retry shortly."
+            )
+
+    return response
 
 
 def load_fallback_data():
@@ -127,14 +247,12 @@ def load_fallback_data():
     try:
 
         with open(
-            "data/sample_data.json",
+            "app/data/sample_data.json",
             "r",
             encoding="utf-8"
         ) as file:
 
-            data = json.load(file)
-
-        return data
+            return json.load(file)
 
     except Exception:
 
@@ -146,11 +264,30 @@ def load_channel_data(channel_name):
 
     try:
 
-        handle = CHANNELS[channel_name]
+        handle = CHANNELS.get(
+            channel_name
+        )
+
+        if not handle:
+
+            return [], pd.DataFrame()
 
         channel_id = get_channel_id(
             handle
         )
+
+        if not channel_id:
+
+            fallback = load_fallback_data()
+
+            enriched = enrich_video_metrics(
+                fallback
+            )
+
+            return (
+                enriched,
+                safe_dataframe(enriched)
+            )
 
         videos = get_latest_videos(
             channel_id
@@ -164,25 +301,27 @@ def load_channel_data(channel_name):
             videos
         )
 
-        df = pd.DataFrame(
+        dataframe = safe_dataframe(
             enriched_videos
         )
 
-        return enriched_videos, df
+        return (
+            enriched_videos,
+            dataframe
+        )
 
     except Exception:
 
         fallback = load_fallback_data()
 
-        enriched_videos = enrich_video_metrics(
+        enriched = enrich_video_metrics(
             fallback
         )
 
-        df = pd.DataFrame(
-            enriched_videos
+        return (
+            enriched,
+            safe_dataframe(enriched)
         )
-
-        return enriched_videos, df
 
 
 @st.cache_data(ttl=1800)
@@ -206,20 +345,28 @@ def load_all_channels():
 @st.cache_data(ttl=3600)
 def load_benchmark_data():
 
-    benchmark = get_competitor_channels_data()
+    try:
 
-    return build_competitive_summary(
-        benchmark
-    )
+        benchmark = (
+            get_competitor_channels_data()
+        )
+
+        return build_competitive_summary(
+            benchmark
+        )
+
+    except Exception:
+
+        return []
 
 
 st.sidebar.image(
     "https://cdn-icons-png.flaticon.com/512/1384/1384060.png",
-    width=80
+    width=90
 )
 
 st.sidebar.title(
-    "MoveUp Media"
+    COMPANY_NAME
 )
 
 st.sidebar.caption(
@@ -257,6 +404,8 @@ st.sidebar.success(
 
 cache_stats = get_cache_statistics()
 
+cache_health = cache_health_check()
+
 st.sidebar.markdown("---")
 
 st.sidebar.markdown(
@@ -265,7 +414,10 @@ st.sidebar.markdown(
 
 st.sidebar.metric(
     "Cache Entries",
-    cache_stats["active_entries"]
+    cache_stats.get(
+        "active_entries",
+        0
+    )
 )
 
 st.sidebar.metric(
@@ -277,6 +429,42 @@ st.sidebar.metric(
     "Competitors",
     len(COMPETITOR_CHANNELS)
 )
+
+st.sidebar.metric(
+    "Gemini API Keys",
+    get_total_available_keys()
+)
+
+st.sidebar.markdown("---")
+
+st.sidebar.markdown(
+    "### AI Runtime Health"
+)
+
+st.sidebar.info(
+    f"Primary Model: {PRIMARY_MODEL}"
+)
+
+st.sidebar.info(
+    f"Fallback Model: {FALLBACK_MODEL}"
+)
+
+st.sidebar.info(
+    "Multi-Key Rotation Active"
+)
+
+st.sidebar.info(
+    "Autonomous Retry Engine Active"
+)
+
+if not cache_health.get(
+    "healthy",
+    True
+):
+
+    st.sidebar.warning(
+        "Cache utilization is high."
+    )
 
 all_channel_data = load_all_channels()
 
@@ -293,6 +481,7 @@ if df.empty:
     st.stop()
 
 numeric_columns = [
+
     "views",
     "likes",
     "comments",
@@ -301,13 +490,10 @@ numeric_columns = [
     "views_per_day"
 ]
 
-for column in numeric_columns:
-
-    if column in df.columns:
-
-        df[column] = pd.to_numeric(
-            df[column]
-        )
+df = safe_numeric_conversion(
+    df,
+    numeric_columns
+)
 
 channel_health_score = (
     calculate_channel_health_score(
@@ -327,14 +513,35 @@ channel_summary = (
     )
 )
 
-top_video = df.sort_values(
-    by="performance_score",
-    ascending=False
-).iloc[0]
+top_video = {}
 
-worst_video = df.sort_values(
-    by="performance_score"
-).iloc[0]
+worst_video = {}
+
+try:
+
+    if not df.empty:
+
+        sorted_df = df.sort_values(
+            by="performance_score",
+            ascending=False
+        )
+
+        if len(sorted_df) > 0:
+
+            top_video = (
+                sorted_df.iloc[0]
+                .to_dict()
+            )
+
+            worst_video = (
+                sorted_df.iloc[-1]
+                .to_dict()
+            )
+
+except Exception:
+
+    pass
+
 
 col_logo, col_title = st.columns(
     [1, 8]
@@ -350,9 +557,9 @@ with col_logo:
 with col_title:
 
     st.markdown(
-        """
+        f"""
         <div class="section-title">
-        MoveUp Media AI Operations Intelligence Platform
+        {APP_TITLE}
         </div>
 
         <div class="small-text">
@@ -407,11 +614,11 @@ with alert1:
 
         <h3>Operational Opportunity</h3>
 
-        <p><strong>Top Video:</strong> {top_video['title']}</p>
+        <p><strong>Top Video:</strong> {top_video.get('title', 'Unavailable')}</p>
 
-        <p><strong>Performance Score:</strong> {top_video['performance_score']}</p>
+        <p><strong>Performance Score:</strong> {top_video.get('performance_score', 0)}</p>
 
-        <p><strong>Momentum:</strong> {top_video['momentum_classification']}</p>
+        <p><strong>Momentum:</strong> {top_video.get('momentum_classification', 'Unavailable')}</p>
 
         </div>
         """,
@@ -426,11 +633,11 @@ with alert2:
 
         <h3>Operational Risk</h3>
 
-        <p><strong>Weakest Video:</strong> {worst_video['title']}</p>
+        <p><strong>Weakest Video:</strong> {worst_video.get('title', 'Unavailable')}</p>
 
-        <p><strong>Performance Score:</strong> {worst_video['performance_score']}</p>
+        <p><strong>Performance Score:</strong> {worst_video.get('performance_score', 0)}</p>
 
-        <p><strong>Retention Signal:</strong> {worst_video['estimated_retention_signal']}</p>
+        <p><strong>Retention Signal:</strong> {worst_video.get('estimated_retention_signal', 'Unavailable')}</p>
 
         </div>
         """,
@@ -453,18 +660,17 @@ report_tab = tabs[2]
 benchmark_tab = tabs[3]
 assistant_tab = tabs[4]
 
+
 with overview_tab:
 
     st.subheader(
         "Executive Performance Overview"
     )
 
-    summary_df = pd.DataFrame(
-        [channel_summary]
-    )
-
     st.dataframe(
-        summary_df,
+        safe_dataframe(
+            [channel_summary]
+        ),
         width="stretch"
     )
 
@@ -482,17 +688,24 @@ with overview_tab:
 
         with thumbnail_cols[index]:
 
-            st.image(
-                video["thumbnail"],
-                width="stretch"
+            thumbnail = video.get(
+                "thumbnail",
+                ""
             )
 
+            if thumbnail:
+
+                st.image(
+                    thumbnail,
+                    width="stretch"
+                )
+
             st.markdown(
-                f"**{video['title']}**"
+                f"**{video.get('title', 'Unknown')}**"
             )
 
             st.caption(
-                f"Views: {video['views']:,}"
+                f"Views: {video.get('views', 0):,}"
             )
 
     st.markdown("---")
@@ -530,6 +743,7 @@ with overview_tab:
         width="stretch"
     )
 
+
 with analytics_tab:
 
     st.subheader(
@@ -544,10 +758,7 @@ with analytics_tab:
         height=650
     )
 
-    st.plotly_chart(
-        fig1,
-        width="stretch"
-    )
+    safe_plotly_chart(fig1)
 
     st.subheader(
         "Engagement Intelligence"
@@ -561,10 +772,7 @@ with analytics_tab:
         height=650
     )
 
-    st.plotly_chart(
-        fig2,
-        width="stretch"
-    )
+    safe_plotly_chart(fig2)
 
     st.subheader(
         "Content Classification"
@@ -588,10 +796,7 @@ with analytics_tab:
         hole=0.45
     )
 
-    st.plotly_chart(
-        fig3,
-        width="stretch"
-    )
+    safe_plotly_chart(fig3)
 
     st.subheader(
         "Views vs Engagement"
@@ -607,10 +812,8 @@ with analytics_tab:
         height=700
     )
 
-    st.plotly_chart(
-        fig4,
-        width="stretch"
-    )
+    safe_plotly_chart(fig4)
+
 
 with report_tab:
 
@@ -632,22 +835,16 @@ with report_tab:
             "AI report not generated yet."
         )
 
-        st.markdown(
-            """
-Click the button below to generate an enterprise AI operational intelligence report.
-"""
-        )
-
         if st.button(
             "Generate AI Report",
             width="stretch"
         ):
 
-            try:
+            with st.spinner(
+                "Generating AI operational intelligence report..."
+            ):
 
-                with st.spinner(
-                    "AI operational intelligence engine generating strategic report..."
-                ):
+                try:
 
                     generated_report = (
                         generate_channel_report(
@@ -656,39 +853,29 @@ Click the button below to generate an enterprise AI operational intelligence rep
                         )
                     )
 
-                    if (
-                        not generated_report
-                        or
-                        generated_report.startswith(
-                            "Report Generation Error"
-                        )
-                        or
-                        generated_report.startswith(
-                            "AI report"
-                        )
-                    ):
-
-                        st.warning(
+                    generated_report = (
+                        sanitize_ai_response(
                             generated_report
                         )
+                    )
 
-                    else:
+                    st.session_state.generated_reports[
+                        report_key
+                    ] = generated_report
 
-                        st.session_state.generated_reports[
-                            report_key
-                        ] = generated_report
+                    st.success(
+                        "AI report generated successfully."
+                    )
 
-                        st.success(
-                            "AI operational intelligence report generated successfully."
-                        )
+                    time.sleep(1)
 
-                        st.rerun()
+                    st.rerun()
 
-            except Exception as error:
+                except Exception as error:
 
-                st.error(
-                    f"AI Report Generation Error: {str(error)}"
-                )
+                    st.error(
+                        f"AI Report Error: {str(error)}"
+                    )
 
     else:
 
@@ -713,30 +900,26 @@ Click the button below to generate an enterprise AI operational intelligence rep
 
                 try:
 
-                    with st.spinner(
-                        "Generating enterprise PDF report..."
-                    ):
+                    timestamp = datetime.now().strftime(
+                        "%Y%m%d_%H%M%S"
+                    )
 
-                        timestamp = datetime.now().strftime(
-                            "%Y%m%d_%H%M%S"
-                        )
+                    pdf_file = (
+                        f"{selected_channel}_{timestamp}.pdf"
+                    )
 
-                        pdf_file = (
-                            f"reports/{selected_channel}_{timestamp}.pdf"
-                        )
-
-                        export_to_pdf(
-                            report,
-                            pdf_file,
-                            selected_channel
-                        )
+                    final_pdf = export_to_pdf(
+                        report,
+                        pdf_file,
+                        selected_channel
+                    )
 
                     st.success(
-                        "PDF report generated successfully."
+                        "PDF generated successfully."
                     )
 
                     with open(
-                        pdf_file,
+                        final_pdf,
                         "rb"
                     ) as pdf:
 
@@ -744,7 +927,7 @@ Click the button below to generate an enterprise AI operational intelligence rep
                             label="Download PDF",
                             data=pdf,
                             file_name=os.path.basename(
-                                pdf_file
+                                final_pdf
                             ),
                             mime="application/pdf",
                             width="stretch"
@@ -765,30 +948,26 @@ Click the button below to generate an enterprise AI operational intelligence rep
 
                 try:
 
-                    with st.spinner(
-                        "Generating enterprise DOCX report..."
-                    ):
+                    timestamp = datetime.now().strftime(
+                        "%Y%m%d_%H%M%S"
+                    )
 
-                        timestamp = datetime.now().strftime(
-                            "%Y%m%d_%H%M%S"
-                        )
+                    docx_file = (
+                        f"{selected_channel}_{timestamp}.docx"
+                    )
 
-                        docx_file = (
-                            f"reports/{selected_channel}_{timestamp}.docx"
-                        )
-
-                        export_to_docx(
-                            report,
-                            docx_file,
-                            selected_channel
-                        )
+                    final_docx = export_to_docx(
+                        report,
+                        docx_file,
+                        selected_channel
+                    )
 
                     st.success(
-                        "DOCX report generated successfully."
+                        "DOCX generated successfully."
                     )
 
                     with open(
-                        docx_file,
+                        final_docx,
                         "rb"
                     ) as docx:
 
@@ -796,7 +975,7 @@ Click the button below to generate an enterprise AI operational intelligence rep
                             label="Download DOCX",
                             data=docx,
                             file_name=os.path.basename(
-                                docx_file
+                                final_docx
                             ),
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             width="stretch"
@@ -815,29 +994,24 @@ Click the button below to generate an enterprise AI operational intelligence rep
             width="stretch"
         ):
 
-            try:
+            if (
+                report_key
+                in
+                st.session_state.generated_reports
+            ):
 
-                if (
+                del st.session_state.generated_reports[
                     report_key
-                    in
-                    st.session_state.generated_reports
-                ):
+                ]
 
-                    del st.session_state.generated_reports[
-                        report_key
-                    ]
+            st.success(
+                "AI report cache cleared."
+            )
 
-                st.success(
-                    "AI report cache cleared successfully."
-                )
+            time.sleep(1)
 
-                st.rerun()
+            st.rerun()
 
-            except Exception as error:
-
-                st.error(
-                    f"AI Regeneration Error: {str(error)}"
-                )
 
 with benchmark_tab:
 
@@ -847,99 +1021,92 @@ with benchmark_tab:
 
     try:
 
-        benchmark_data = load_benchmark_data()
+        benchmark_data = (
+            load_benchmark_data()
+        )
 
-        if not benchmark_data:
+        benchmark_df = safe_dataframe(
+            benchmark_data
+        )
+
+        if benchmark_df.empty:
 
             st.warning(
-                "Competitive benchmark data is currently unavailable."
+                "Competitive benchmark data unavailable."
             )
 
         else:
 
-            benchmark_df = pd.DataFrame(
-                benchmark_data
+            st.dataframe(
+                benchmark_df,
+                width="stretch"
             )
 
-            if benchmark_df.empty:
+            required_columns = [
+
+                "channel_name",
+
+                "subscribers"
+            ]
+
+            missing_columns = [
+
+                column
+
+                for column in required_columns
+
+                if column not in benchmark_df.columns
+            ]
+
+            if missing_columns:
 
                 st.warning(
-                    "Competitive benchmark dataframe is empty."
+                    f"Missing benchmark columns: {missing_columns}"
                 )
 
             else:
 
-                st.dataframe(
+                benchmark_df = safe_numeric_conversion(
                     benchmark_df,
-                    width="stretch"
+                    ["subscribers"]
                 )
 
-                required_columns = [
-                    "channel_name",
-                    "subscribers"
-                ]
+                benchmark_df = benchmark_df.dropna(
+                    subset=["subscribers"]
+                )
 
-                missing_columns = [
-                    column
-                    for column in required_columns
-                    if column not in benchmark_df.columns
-                ]
-
-                if missing_columns:
+                if benchmark_df.empty:
 
                     st.warning(
-                        f"Missing benchmark columns: {missing_columns}"
+                        "No valid benchmark subscriber data."
                     )
 
                 else:
 
-                    benchmark_df[
-                        "subscribers"
-                    ] = pd.to_numeric(
-                        benchmark_df[
-                            "subscribers"
-                        ],
-                        errors="coerce"
+                    benchmark_chart = px.bar(
+                        benchmark_df,
+                        x="channel_name",
+                        y="subscribers",
+                        color="channel_name",
+                        text_auto=True,
+                        height=600,
+                        title="Competitive Subscriber Benchmark"
                     )
 
-                    benchmark_df = benchmark_df.dropna(
-                        subset=["subscribers"]
+                    benchmark_chart.update_layout(
+                        template="plotly_dark"
                     )
 
-                    if benchmark_df.empty:
-
-                        st.warning(
-                            "No valid benchmark subscriber data available."
-                        )
-
-                    else:
-
-                        benchmark_chart = px.bar(
-                            benchmark_df,
-                            x="channel_name",
-                            y="subscribers",
-                            color="channel_name",
-                            text_auto=True,
-                            height=600,
-                            title="Competitive Subscriber Benchmark"
-                        )
-
-                        benchmark_chart.update_layout(
-                            template="plotly_dark",
-                            xaxis_title="Channel",
-                            yaxis_title="Subscribers"
-                        )
-
-                        st.plotly_chart(
-                            benchmark_chart,
-                            width="stretch"
-                        )
+                    safe_plotly_chart(
+                        benchmark_chart
+                    )
 
     except Exception as error:
 
         st.error(
             f"Benchmark Intelligence Error: {str(error)}"
         )
+
 
 with assistant_tab:
 
@@ -948,7 +1115,7 @@ with assistant_tab:
     )
 
     st.caption(
-        "AI-powered conversational operational intelligence engine for strategic YouTube analytics."
+        "AI-powered operational intelligence assistant for strategic YouTube analytics."
     )
 
     for message in st.session_state.chat_history:
@@ -969,13 +1136,10 @@ with assistant_tab:
 
         user_question = user_question.strip()
 
-        if not user_question:
-
-            st.stop()
-
         current_time = time.time()
 
         cooldown_remaining = (
+
             AI_REQUEST_COOLDOWN
             -
             (
@@ -988,7 +1152,7 @@ with assistant_tab:
         if cooldown_remaining > 0:
 
             st.warning(
-                f"AI request cooldown active. Please wait {int(cooldown_remaining)} seconds."
+                f"AI cooldown active. Please wait {int(cooldown_remaining)} seconds."
             )
 
             st.stop()
@@ -1007,15 +1171,14 @@ with assistant_tab:
             }
         )
 
-        if len(
-            st.session_state.chat_history
-        ) > MAX_CHAT_HISTORY:
-
-            st.session_state.chat_history = (
-                st.session_state.chat_history[
-                    -MAX_CHAT_HISTORY:
-                ]
-            )
+        st.session_state.chat_history = (
+            st.session_state.chat_history[
+                -min(
+                    MAX_CHAT_HISTORY,
+                    10
+                ):
+            ]
+        )
 
         with st.chat_message("user"):
 
@@ -1024,12 +1187,6 @@ with assistant_tab:
             )
 
         with st.chat_message("assistant"):
-
-            ai_response = ""
-
-            detected_intent = (
-                "general_analysis"
-            )
 
             with st.spinner(
                 "Autonomous AI strategist analyzing operational intelligence..."
@@ -1049,6 +1206,10 @@ with assistant_tab:
                         "No AI response generated."
                     )
 
+                    ai_response = sanitize_ai_response(
+                        ai_response
+                    )
+
                     detected_intent = result.get(
                         "intent",
                         "general_analysis"
@@ -1058,51 +1219,9 @@ with assistant_tab:
                         f"Detected Intent: {detected_intent}"
                     )
 
-                    if (
-                        "quota"
-                        in ai_response.lower()
-                    ):
-
-                        st.warning(
-                            ai_response
-                        )
-
-                    elif (
-                        "503"
-                        in ai_response.lower()
-                    ):
-
-                        st.warning(
-                            "AI service is temporarily overloaded. Please retry shortly."
-                        )
-
-                    elif (
-                        "404"
-                        in ai_response.lower()
-                    ):
-
-                        st.error(
-                            "Configured Gemini model is unavailable."
-                        )
-
-                    elif (
-                        "error"
-                        in ai_response.lower()
-                    ):
-
-                        st.error(
-                            ai_response
-                        )
-
-                    else:
-
-                        st.success(
-                            "AI operational analysis completed successfully."
-                        )
-
-                        st.markdown(
-                            ai_response
-                        )
+                    st.markdown(
+                        ai_response
+                    )
 
                 except Exception as error:
 
@@ -1114,19 +1233,17 @@ with assistant_tab:
                         ai_response
                     )
 
-            st.session_state.chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": ai_response,
-                    "timestamp": str(
-                        datetime.now()
-                    )
-                }
-            )
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": ai_response,
+                "timestamp": str(
+                    datetime.now()
+                )
+            }
+        )
 
     if st.session_state.chat_history:
-
-        st.markdown("")
 
         if st.button(
             "Clear Conversation",
@@ -1135,7 +1252,10 @@ with assistant_tab:
 
             st.session_state.chat_history = []
 
+            time.sleep(1)
+
             st.rerun()
+
 
 st.markdown("---")
 

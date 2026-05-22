@@ -1,18 +1,40 @@
 import time
+import json
 import hashlib
 import threading
 
+from collections import OrderedDict
 
-CACHE = {}
-
-CACHE_LOCK = threading.Lock()
 
 DEFAULT_EXPIRY_SECONDS = 300
+
+MAX_CACHE_ITEMS = 1000
+
+CACHE = OrderedDict()
+
+CACHE_LOCK = threading.RLock()
+
+
+def current_timestamp():
+
+    return time.time()
 
 
 def normalize_identifier(identifier):
 
-    return str(identifier).strip().lower()
+    try:
+
+        normalized = json.dumps(
+            identifier,
+            sort_keys=True,
+            default=str
+        )
+
+        return normalized.strip().lower()
+
+    except Exception:
+
+        return str(identifier).strip().lower()
 
 
 def generate_cache_key(
@@ -26,18 +48,15 @@ def generate_cache_key(
         )
     )
 
-    hashed_identifier = hashlib.md5(
-        normalized_identifier.encode()
+    hashed_identifier = hashlib.sha256(
+        normalized_identifier.encode(
+            "utf-8"
+        )
     ).hexdigest()
 
     return (
         f"{prefix}:{hashed_identifier}"
     )
-
-
-def current_timestamp():
-
-    return time.time()
 
 
 def build_cache_item(
@@ -46,6 +65,7 @@ def build_cache_item(
 ):
 
     return {
+
         "value":
             value,
 
@@ -59,13 +79,66 @@ def build_cache_item(
 
 def is_cache_expired(item):
 
-    elapsed_time = (
-        current_timestamp()
-        -
-        item["timestamp"]
+    try:
+
+        elapsed_time = (
+            current_timestamp()
+            -
+            item["timestamp"]
+        )
+
+        return elapsed_time > item["expiry"]
+
+    except Exception:
+
+        return True
+
+
+def cleanup_expired_cache():
+
+    deleted_keys = []
+
+    with CACHE_LOCK:
+
+        cache_keys = list(
+            CACHE.keys()
+        )
+
+        for key in cache_keys:
+
+            item = CACHE.get(key)
+
+            if not item:
+
+                continue
+
+            if is_cache_expired(item):
+
+                deleted_keys.append(
+                    key
+                )
+
+        for key in deleted_keys:
+
+            CACHE.pop(
+                key,
+                None
+            )
+
+    return len(
+        deleted_keys
     )
 
-    return elapsed_time > item["expiry"]
+
+def enforce_cache_limit():
+
+    with CACHE_LOCK:
+
+        while len(CACHE) > MAX_CACHE_ITEMS:
+
+            CACHE.popitem(
+                last=False
+            )
 
 
 def set_cache(
@@ -74,71 +147,122 @@ def set_cache(
     expiry=DEFAULT_EXPIRY_SECONDS
 ):
 
-    with CACHE_LOCK:
+    try:
 
-        CACHE[key] = build_cache_item(
+        cleanup_expired_cache()
+
+        cache_item = build_cache_item(
             value,
             expiry
         )
 
+        with CACHE_LOCK:
+
+            CACHE[key] = cache_item
+
+            CACHE.move_to_end(
+                key
+            )
+
+            enforce_cache_limit()
+
+        return True
+
+    except Exception as error:
+
+        print(
+            f"[CACHE SET ERROR] {str(error)}"
+        )
+
+        return False
+
 
 def get_cache(key):
 
-    with CACHE_LOCK:
+    try:
 
-        item = CACHE.get(key)
+        with CACHE_LOCK:
 
-        if not item:
+            item = CACHE.get(key)
 
-            return None
+            if not item:
 
-        if is_cache_expired(item):
+                return None
 
-            delete_cache(key)
+            if is_cache_expired(item):
 
-            return None
+                CACHE.pop(
+                    key,
+                    None
+                )
 
-        return item["value"]
+                return None
+
+            CACHE.move_to_end(
+                key
+            )
+
+            return item.get(
+                "value"
+            )
+
+    except Exception as error:
+
+        print(
+            f"[CACHE GET ERROR] {str(error)}"
+        )
+
+        return None
 
 
 def delete_cache(key):
 
-    with CACHE_LOCK:
+    try:
 
-        if key in CACHE:
+        with CACHE_LOCK:
 
-            del CACHE[key]
+            CACHE.pop(
+                key,
+                None
+            )
+
+        return True
+
+    except Exception as error:
+
+        print(
+            f"[CACHE DELETE ERROR] {str(error)}"
+        )
+
+        return False
 
 
 def clear_cache():
 
-    with CACHE_LOCK:
+    try:
 
-        CACHE.clear()
+        with CACHE_LOCK:
+
+            CACHE.clear()
+
+        return True
+
+    except Exception as error:
+
+        print(
+            f"[CACHE CLEAR ERROR] {str(error)}"
+        )
+
+        return False
 
 
 def cache_exists(key):
 
-    return get_cache(key) is not None
+    cached_value = get_cache(
+        key
+    )
 
-
-def cleanup_expired_cache():
-
-    expired_keys = []
-
-    with CACHE_LOCK:
-
-        for key, item in CACHE.items():
-
-            if is_cache_expired(item):
-
-                expired_keys.append(key)
-
-        for key in expired_keys:
-
-            del CACHE[key]
-
-    return len(expired_keys)
+    return cached_value is not None
 
 
 def get_cache_size():
@@ -156,7 +280,9 @@ def get_cache_keys():
 
     with CACHE_LOCK:
 
-        return list(CACHE.keys())
+        return list(
+            CACHE.keys()
+        )
 
 
 def get_cache_statistics():
@@ -165,24 +291,178 @@ def get_cache_statistics():
 
     with CACHE_LOCK:
 
-        total_items = len(CACHE)
+        total_items = len(
+            CACHE
+        )
 
-        total_memory_entries = sum([
-            1
-            for _
-            in CACHE.values()
-        ])
+        total_expired = 0
+
+        for item in CACHE.values():
+
+            if is_cache_expired(item):
+
+                total_expired += 1
+
+        active_entries = (
+            total_items
+            -
+            total_expired
+        )
 
     return {
+
         "total_cache_items":
             total_items,
 
         "active_entries":
-            total_memory_entries,
+            active_entries,
+
+        "expired_entries":
+            total_expired,
 
         "default_expiry_seconds":
-            DEFAULT_EXPIRY_SECONDS
+            DEFAULT_EXPIRY_SECONDS,
+
+        "max_cache_items":
+            MAX_CACHE_ITEMS
     }
+
+
+def get_cache_item_metadata(key):
+
+    try:
+
+        with CACHE_LOCK:
+
+            item = CACHE.get(key)
+
+            if not item:
+
+                return None
+
+            created_timestamp = item.get(
+                "timestamp",
+                0
+            )
+
+            age_seconds = (
+                current_timestamp()
+                -
+                created_timestamp
+            )
+
+            remaining_expiry_seconds = max(
+
+                0,
+
+                item.get(
+                    "expiry",
+                    0
+                )
+                -
+                age_seconds
+            )
+
+            return {
+
+                "created_timestamp":
+                    created_timestamp,
+
+                "age_seconds":
+                    round(
+                        age_seconds,
+                        2
+                    ),
+
+                "remaining_expiry_seconds":
+                    round(
+                        remaining_expiry_seconds,
+                        2
+                    )
+            }
+
+    except Exception as error:
+
+        print(
+            f"[CACHE METADATA ERROR] {str(error)}"
+        )
+
+        return None
+
+
+def refresh_cache_expiry(
+    key,
+    new_expiry=DEFAULT_EXPIRY_SECONDS
+):
+
+    try:
+
+        with CACHE_LOCK:
+
+            item = CACHE.get(key)
+
+            if not item:
+
+                return False
+
+            item["timestamp"] = (
+                current_timestamp()
+            )
+
+            item["expiry"] = (
+                new_expiry
+            )
+
+            CACHE.move_to_end(
+                key
+            )
+
+        return True
+
+    except Exception as error:
+
+        print(
+            f"[CACHE REFRESH ERROR] {str(error)}"
+        )
+
+        return False
+
+
+def invalidate_prefix(prefix):
+
+    deleted_count = 0
+
+    try:
+
+        with CACHE_LOCK:
+
+            matching_keys = [
+
+                key
+
+                for key in CACHE.keys()
+
+                if key.startswith(prefix)
+            ]
+
+            for key in matching_keys:
+
+                CACHE.pop(
+                    key,
+                    None
+                )
+
+                deleted_count += 1
+
+        return deleted_count
+
+    except Exception as error:
+
+        print(
+            f"[CACHE INVALIDATION ERROR] {str(error)}"
+        )
+
+        return 0
 
 
 def get_or_set_cache(
@@ -191,21 +471,33 @@ def get_or_set_cache(
     expiry=DEFAULT_EXPIRY_SECONDS
 ):
 
-    cached_value = get_cache(key)
+    cached_value = get_cache(
+        key
+    )
 
     if cached_value is not None:
 
         return cached_value
 
-    value = callback()
+    try:
 
-    set_cache(
-        key,
-        value,
-        expiry
-    )
+        value = callback()
 
-    return value
+        set_cache(
+            key,
+            value,
+            expiry
+        )
+
+        return value
+
+    except Exception as error:
+
+        print(
+            f"[CACHE CALLBACK ERROR] {str(error)}"
+        )
+
+        return None
 
 
 def cache_response(
@@ -215,13 +507,13 @@ def cache_response(
     expiry=DEFAULT_EXPIRY_SECONDS
 ):
 
-    key = generate_cache_key(
+    cache_key = generate_cache_key(
         prefix,
         identifier
     )
 
     return get_or_set_cache(
-        key,
+        cache_key,
         callback,
         expiry
     )
@@ -232,85 +524,55 @@ def warm_cache():
     cleanup_expired_cache()
 
     return {
+
         "status":
             "cache_ready",
 
         "active_cache_items":
-            get_cache_size()
+            get_cache_size(),
+
+        "cache_statistics":
+            get_cache_statistics()
     }
 
 
-def invalidate_prefix(prefix):
+def cache_health_check():
 
-    deleted_count = 0
+    try:
 
-    with CACHE_LOCK:
+        cleanup_expired_cache()
 
-        matching_keys = [
-            key
-            for key in CACHE.keys()
-            if key.startswith(prefix)
-        ]
+        stats = get_cache_statistics()
 
-        for key in matching_keys:
+        cache_usage_percent = round(
 
-            del CACHE[key]
-
-            deleted_count += 1
-
-    return deleted_count
-
-
-def get_cache_item_metadata(key):
-
-    with CACHE_LOCK:
-
-        item = CACHE.get(key)
-
-        if not item:
-
-            return None
-
-        age_seconds = (
-            current_timestamp()
-            -
-            item["timestamp"]
-        )
-
-        remaining_seconds = max(
-            0,
-            item["expiry"] - age_seconds
+            (
+                stats["total_cache_items"]
+                /
+                MAX_CACHE_ITEMS
+            ) * 100,
+            2
         )
 
         return {
-            "created_timestamp":
-                item["timestamp"],
 
-            "age_seconds":
-                round(age_seconds, 2),
+            "healthy":
+                cache_usage_percent < 90,
 
-            "remaining_expiry_seconds":
-                round(remaining_seconds, 2)
+            "cache_usage_percent":
+                cache_usage_percent,
+
+            "statistics":
+                stats
         }
 
+    except Exception as error:
 
-def refresh_cache_expiry(
-    key,
-    new_expiry=DEFAULT_EXPIRY_SECONDS
-):
+        return {
 
-    with CACHE_LOCK:
+            "healthy":
+                False,
 
-        item = CACHE.get(key)
-
-        if not item:
-
-            return False
-
-        item["timestamp"] = (
-            current_timestamp()
-        )
-
-        item["expiry"] = new_expiry
-
-        return True
+            "error":
+                str(error)
+        }
