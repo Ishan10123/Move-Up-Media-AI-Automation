@@ -243,7 +243,7 @@ def ask_ai(
         set_cache(
             cache_key,
             final_response,
-            expiry=300
+            expiry=1800
         )
 
         return final_response

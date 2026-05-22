@@ -375,7 +375,7 @@ def generate_channel_report(
         set_cache(
             cache_key,
             final_response,
-            expiry=600
+            expiry=3600
         )
 
         return final_response

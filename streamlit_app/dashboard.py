@@ -622,43 +622,67 @@ with report_tab:
         f"report_{selected_channel}"
     )
 
-    report = None
+    report = st.session_state.generated_reports.get(
+        report_key
+    )
 
-    if report_key not in st.session_state.generated_reports:
+    if not report:
 
-        with st.spinner(
-            "AI operational intelligence engine generating strategic report..."
+        st.info(
+            "AI report not generated yet."
+        )
+
+        st.markdown(
+            """
+Click the button below to generate an enterprise AI operational intelligence report.
+"""
+        )
+
+        if st.button(
+            "Generate AI Report",
+            width="stretch"
         ):
 
             try:
 
-                generated_report = (
-                    generate_channel_report(
-                        selected_channel,
-                        enriched_videos
-                    )
-                )
-
-                if (
-                    not generated_report
-                    or
-                    generated_report.startswith(
-                        "Report Generation Error"
-                    )
-                    or
-                    generated_report.startswith(
-                        "AI report")
+                with st.spinner(
+                    "AI operational intelligence engine generating strategic report..."
                 ):
 
-                    st.warning(
-                        generated_report
+                    generated_report = (
+                        generate_channel_report(
+                            selected_channel,
+                            enriched_videos
+                        )
                     )
 
-                else:
+                    if (
+                        not generated_report
+                        or
+                        generated_report.startswith(
+                            "Report Generation Error"
+                        )
+                        or
+                        generated_report.startswith(
+                            "AI report"
+                        )
+                    ):
 
-                    st.session_state.generated_reports[
-                        report_key
-                    ] = generated_report
+                        st.warning(
+                            generated_report
+                        )
+
+                    else:
+
+                        st.session_state.generated_reports[
+                            report_key
+                        ] = generated_report
+
+                        st.success(
+                            "AI operational intelligence report generated successfully."
+                        )
+
+                        st.rerun()
 
             except Exception as error:
 
@@ -666,19 +690,11 @@ with report_tab:
                     f"AI Report Generation Error: {str(error)}"
                 )
 
-    report = (
-        st.session_state.generated_reports.get(
-            report_key
-        )
-    )
-
-    if not report:
-
-        st.info(
-            "AI report is currently unavailable. Please retry after a few moments."
-        )
-
     else:
+
+        st.success(
+            "AI report loaded successfully."
+        )
 
         st.markdown(
             report
@@ -799,17 +815,29 @@ with report_tab:
             width="stretch"
         ):
 
-            if (
-                report_key
-                in
-                st.session_state.generated_reports
-            ):
+            try:
 
-                del st.session_state.generated_reports[
+                if (
                     report_key
-                ]
+                    in
+                    st.session_state.generated_reports
+                ):
 
-            st.rerun()
+                    del st.session_state.generated_reports[
+                        report_key
+                    ]
+
+                st.success(
+                    "AI report cache cleared successfully."
+                )
+
+                st.rerun()
+
+            except Exception as error:
+
+                st.error(
+                    f"AI Regeneration Error: {str(error)}"
+                )
 
 with benchmark_tab:
 
@@ -817,28 +845,101 @@ with benchmark_tab:
         "Competitive Benchmark Intelligence"
     )
 
-    benchmark_data = load_benchmark_data()
+    try:
 
-    benchmark_df = pd.DataFrame(
-        benchmark_data
-    )
+        benchmark_data = load_benchmark_data()
 
-    st.dataframe(
-        benchmark_df,
-        width="stretch"
-    )
+        if not benchmark_data:
 
-    benchmark_chart = px.bar(
-        benchmark_df,
-        x="channel_name",
-        y="subscribers",
-        height=600
-    )
+            st.warning(
+                "Competitive benchmark data is currently unavailable."
+            )
 
-    st.plotly_chart(
-        benchmark_chart,
-        width="stretch"
-    )
+        else:
+
+            benchmark_df = pd.DataFrame(
+                benchmark_data
+            )
+
+            if benchmark_df.empty:
+
+                st.warning(
+                    "Competitive benchmark dataframe is empty."
+                )
+
+            else:
+
+                st.dataframe(
+                    benchmark_df,
+                    width="stretch"
+                )
+
+                required_columns = [
+                    "channel_name",
+                    "subscribers"
+                ]
+
+                missing_columns = [
+                    column
+                    for column in required_columns
+                    if column not in benchmark_df.columns
+                ]
+
+                if missing_columns:
+
+                    st.warning(
+                        f"Missing benchmark columns: {missing_columns}"
+                    )
+
+                else:
+
+                    benchmark_df[
+                        "subscribers"
+                    ] = pd.to_numeric(
+                        benchmark_df[
+                            "subscribers"
+                        ],
+                        errors="coerce"
+                    )
+
+                    benchmark_df = benchmark_df.dropna(
+                        subset=["subscribers"]
+                    )
+
+                    if benchmark_df.empty:
+
+                        st.warning(
+                            "No valid benchmark subscriber data available."
+                        )
+
+                    else:
+
+                        benchmark_chart = px.bar(
+                            benchmark_df,
+                            x="channel_name",
+                            y="subscribers",
+                            color="channel_name",
+                            text_auto=True,
+                            height=600,
+                            title="Competitive Subscriber Benchmark"
+                        )
+
+                        benchmark_chart.update_layout(
+                            template="plotly_dark",
+                            xaxis_title="Channel",
+                            yaxis_title="Subscribers"
+                        )
+
+                        st.plotly_chart(
+                            benchmark_chart,
+                            width="stretch"
+                        )
+
+    except Exception as error:
+
+        st.error(
+            f"Benchmark Intelligence Error: {str(error)}"
+        )
 
 with assistant_tab:
 
